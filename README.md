@@ -9,16 +9,17 @@ PyQt5 标注工具，SAM 点击分割 + 拖拽画框一体化界面，输出 YOL
 自动检测平台（x86_64 / Jetson aarch64），自动安装所有依赖：
 
 ```bash
-git clone <repo-url>
-cd yolo_sam_labeler
+git clone https://github.com/Nicotinamide/Yolo_sam_labeler.git
+cd Yolo_sam_labeler
 bash install.sh
 ```
 
 脚本会：
-1. 检测你的架构（x86 用 uv，Jetson 用 conda）
-2. 创建虚拟环境
-3. 安装所有依赖（包括 PyTorch）
-4. 验证安装是否成功
+1. 检测你的架构（x86_64 / aarch64）
+2. 自动安装 uv（如果没有）
+3. 创建虚拟环境并安装所有依赖（包括 PyTorch）
+4. Jetson 上自动安装系统 PyQt5 并开启 system-site-packages
+5. 验证安装是否成功
 
 ---
 
@@ -119,6 +120,14 @@ yolo-sam-label \
   --yolo-weights ./best.pt
 ```
 
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--image-dir` | 图片目录 | 当前目录 |
+| `--label-dir` | 标签保存目录 | `IMAGE_DIR/labels/` |
+| `--sam-checkpoint` | SAM 权重路径 | 自动搜索当前目录 |
+| `--model-type` | SAM 模型类型：`vit_h` / `vit_l` / `vit_b` | `vit_h` |
+| `--yolo-weights` | YOLO 权重路径（可选） | 无 |
+
 - 只指定图片目录时，标签自动保存到 `IMAGE_DIR/labels/`
 - 分割 mask → `labels/*.txt`（YOLO seg 格式）
 - 检测框 → `labels_detect/*.txt`（YOLO detect 格式）
@@ -179,7 +188,7 @@ Jetson / CPU 用户建议用 `vit_b`，速度快很多。
 yolo_sam_labeler/
 ├── install.sh                  # 一键安装脚本
 ├── pyproject.toml              # 项目配置 & 依赖
-├── environment.yml             # conda 环境 (Jetson)
+├── environment.yml             # conda 环境 (任意平台备选)
 ├── src/yolo_sam_labeler/
 │   ├── __init__.py             # Qt 插件修复 (Jetson)
 │   ├── __main__.py             # 入口

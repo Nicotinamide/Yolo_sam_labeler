@@ -15,8 +15,8 @@ venv/
 env/
 .conda/
 
-# uv lock (platform-specific)
-uv.lock
+# uv lock — keep in git so collaborators get reproducible deps
+# uv.lock
 
 # IDE
 .idea/

@@ -39,6 +39,11 @@ yolo-sam-label
 
 ```bash
 uv sync --extra all
+
+# PyTorch must be installed separately (not included in uv deps):
+#   GPU:  uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#   CPU:  uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
 uv run yolo-sam-label
 ```
 

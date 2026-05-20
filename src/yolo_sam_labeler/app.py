@@ -390,6 +390,7 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
                 return
         if len(self.classes) == 0:
             self.classes.set_names(dict(DEFAULT_CLASS_NAMES))
+            self._log("未找到 classes.txt，请在右侧面板添加类别。", "warn")
 
     def _persist_classes(self):
         data = self.classes.to_names()

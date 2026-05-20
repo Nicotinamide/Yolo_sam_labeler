@@ -11,7 +11,7 @@ import numpy as np
 from PyQt5.QtCore import QObject, pyqtSignal
 
 
-DEFAULT_CLASS_NAMES = {i: str(i) for i in range(15)}
+DEFAULT_CLASS_NAMES = {0: "0"}
 
 
 # ---------------------------------------------------------------------------

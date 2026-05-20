@@ -24,7 +24,8 @@ bash install.sh
 
 ### 方式二：手动安装
 
-#### x86_64 (桌面/服务器)
+<details>
+<summary><b>x86_64 — uv（推荐）</b></summary>
 
 前提：安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)
 
@@ -42,7 +43,10 @@ uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cp
 uv run yolo-sam-label
 ```
 
-#### Jetson (aarch64 / JetPack 6)
+</details>
+
+<details>
+<summary><b>Jetson (aarch64) — uv</b></summary>
 
 前提：安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) + 系统 PyQt5
 
@@ -62,6 +66,35 @@ uv pip install torch==2.8.0 torchvision==0.23.0 --index-url https://pypi.jetson-
 # 4. 运行
 uv run yolo-sam-label
 ```
+
+</details>
+
+<details>
+<summary><b>任意平台 — conda</b></summary>
+
+前提：安装 [miniforge](https://github.com/conda-forge/miniforge) 或 Anaconda
+
+```bash
+# 1. 创建环境 (包含 Python, NumPy, OpenCV, PyQt5, ultralytics, SAM)
+conda env create -f environment.yml
+conda activate yolo-sam-labeler
+
+# 2. 安装 PyTorch（根据平台选一个）
+#    x86_64 GPU:
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#    Jetson:
+pip install torch==2.8.0 torchvision==0.23.0 --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+#    CPU:
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# 3. 安装本项目
+pip install -e .
+
+# 4. 运行
+yolo-sam-label
+```
+
+</details>
 
 ---
 

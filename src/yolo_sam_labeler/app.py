@@ -388,9 +388,13 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
                 self.classes.set_names(classes)
                 self._log(f"已载入类别: {path}", "ok")
                 return
+        # No classes.txt found — keep current classes if we have any.
+        # Only fall back to default when truly empty (first launch, no history).
         if len(self.classes) == 0:
             self.classes.set_names(dict(DEFAULT_CLASS_NAMES))
             self._log("未找到 classes.txt，请在右侧面板添加类别。", "warn")
+        else:
+            self._log("未找到 classes.txt，保留当前类别。", "info")
 
     def _persist_classes(self):
         data = self.classes.to_names()
@@ -472,6 +476,10 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         self._load_classes_for_current_dirs()
         self.image_paths = scan_images(path)
         self.index = 0
+        # Reset ROI — old ROI mask dimensions won't match new images
+        self.roi_mode = "full"
+        self.roi_pts.clear()
+        self.roi_mask = None
         self._remember_paths()
         if self.image_paths:
             self._load_current_image()

@@ -1,0 +1,295 @@
+# YOLO SAM Labeler — 测试计划与功能逻辑文档
+
+## 一、模块功能逻辑梳理
+
+---
+
+### 1. models.py — 数据模型
+
+#### Box (检测框)
+- 存储: class_id, x1, y1, x2, y2 (原图像素坐标)
+- 计算属性: width, height, center
+- 命中检测: contains(x, y) → x1 <= x <= x2 and y1 <= y <= y2
+
+#### Mask (分割掩膜)
+- 存储: class_id, data (H×W uint8 二值数组, 0/1)
+- 命中检测: contains(x, y) → data[y, x] == 1 (边界检查)
+
+#### ClassRegistry (类别注册表)
+- 数据: dict[int, str] (class_id → name)
+- 操作:
+  - add(name) → 分配 max_id+1, 发射 classes_changed
+  - set_names(dict) → 替换全部, 清理空名
+  - ensure(id, name?) → 若不存在则添加
+  - ensure_ids(iterable) → 批量 ensure, 最多发射一次信号
+  - remove(id) → 删除, 不存在返回 False
+  - rename(id, name) → 重命名
+- 信号: classes_changed (QObject)
+- 边界条件:
+  - 空注册表时 max_id 返回 -1
+  - add 总是用 max+1 (稀疏 ID 不回填)
+
+#### AnnotationStore (标注存储)
+- 状态: masks[], boxes[], last_kind, image_width, image_height, label_dir
+- 查询:
+  - total_count → len(masks) + len(boxes)
+  - find_at(x, y) → 从后往前搜索: 先 boxes 再 masks (后添加的在顶层)
+- 添加:
+  - add_mask(data, class_id) → append, last_kind="mask", emit changed
+  - add_box(x1,y1,x2,y2,cid) → append, last_kind="box", emit changed
+- 转换:
+  - replace_mask_with_box(idx, x1,y1,x2,y2) → pop mask, append box
+  - replace_box_with_mask(idx, snapshot, mask, cid) → 验证 snapshot 一致后替换
+    - _find_box_snapshot: 先尝试 idx 位置精确匹配, 再全表扫描
+- 删除:
+  - delete_at(x, y) → find_at + del, 刷新 last_kind
+  - undo_last() → 根据 last_kind pop 对应列表最后一项
+    - 若 last_kind="box" 且 boxes 非空 → pop boxes
+    - 否则 pop masks
+    - BUG 风险: 如果 last_kind="mask" 但 masks 空, 返回 False (不会 pop boxes)
+- 批量导入:
+  - apply_yolo_predictions(masks, mask_cids, boxes, box_cids, replace)
+    - replace=True → clear 后追加
+- 信号: changed (每次突变后)
+
+---
+
+### 2. io_utils.py — 文件格式读写
+
+#### 图像扫描
+- scan_images(dir) → sorted list of abs paths, 过滤 IMAGE_EXTS
+
+#### 图像加载
+- load_image_bgr(path):
+  - 用 open() + np.frombuffer + cv2.imdecode (兼容非 ASCII 路径)
+  - 调用 _apply_exif_orientation 修正拍照方向 (1-8 EXIF 值)
+  - 失败返回 None
+- load_image_rgb(path): BGR→RGB
+
+#### 类别文件
+- load_class_names(path):
+  - 支持格式: "name" (行号为 ID), "id name", "id: name"
+  - 空行/# 注释跳过
+  - next_id 跟踪下一个隐式 ID
+- save_class_names(path, dict):
+  - 连续 ID (0,1,2,...) → 只写名字
+  - 稀疏 ID → "id name" 格式
+  - 自动创建父目录
+
+#### YOLO 分割格式
+- masks_to_yolo_lines(masks, w, h):
+  - 对每个 mask: findContours → 取最大轮廓 → approxPolyDP 简化
+  - 面积<50 的跳过, 顶点<3 的跳过
+  - 输出: "class_id x1/w y1/h x2/w y2/h ..." (归一化坐标)
+- load_masks_from_txt(path, w, h):
+  - 每行 ≥7 个 token (class_id + ≥3 个坐标对)
+  - fillPoly 重建 mask, sum<30 的跳过
+
+#### YOLO 检测格式
+- boxes_to_yolo_lines(boxes, w, h):
+  - 输出: "class_id cx/w cy/h bw/w bh/h"
+- load_boxes_from_txt(path, w, h):
+  - 解析 cx,cy,bw,bh → 转回 x1,y1,x2,y2
+  - 宽高<3 的跳过
+
+#### 统一保存/加载
+- save_labels(store, stem, w, h):
+  - → save_labels_seg: {label_dir}/{stem}.txt
+  - → save_labels_detect: {label_dir}_detect/{stem}.txt
+  - detect 目录: 若无 boxes 且文件不存在则不创建
+- load_labels_for_image(store, image_path, w, h):
+  - 清空 store → 加载 seg → 加载 detect → ensure_ids → emit changed
+
+---
+
+### 3. canvas.py — 坐标变换与渲染
+
+#### CoordTransformer
+- 模型: fit-to-canvas viewport
+  - fit_scale = min(cw/iw, ch/ih) — 全图适配缩放
+  - zoom: 1.0~12.0, zoom=1 显示全图
+  - view_x1, view_y1: 视图左上角 (图像坐标)
+  - view_width = iw/zoom, view_height = ih/zoom
+- 坐标转换:
+  - canvas_to_image(cx, cy) → 画布像素 → 图像像素 (可能 None)
+  - image_to_canvas(ix, iy) → 图像像素 → 画布像素
+- 操作:
+  - zoom_at(factor, cursor) → 以光标为锚点缩放, clamp
+  - pan_by(dx, dy) → 平移 (画布像素除以 scale), clamp
+  - update_canvas_size(w, h) → 保持视图中心
+  - reset() → zoom=1, origin=(0,0)
+- 边界钳位: view 不能超出 [0, iw-view_width] × [0, ih-view_height]
+
+#### render_composite (纯函数)
+- 输入: image_bgr, store, hover 状态, draw_state, ROI
+- 图层顺序: 原图 → mask 叠加(0.42/0.58) → mask 文字 → hover 轮廓 → box 框 → 拖拽预览 → ROI
+- 输出: BGR ndarray
+
+#### composite_to_pixmap
+- 裁剪 view 区域 → resize 到 display_size → 贴到 canvas_pix 居中
+
+#### ImageCanvas (QLabel 子类)
+- 转发所有事件到回调 (on_wheel, on_mouse_press, ...)
+- setMouseTracking(True), StrongFocus
+
+---
+
+### 4. sam_service.py — SAM 服务层
+
+#### SamService 状态机
+- 状态: _ready, _gen(generation 计数), _active_key, _cached_keys, _crop_info
+- 优先级系统: _priority_lock + _priority_gen + _priority_key (线程安全)
+- 生命周期:
+  - load(ckpt, type, device) → 创建线程 → worker.do_load
+  - shutdown() → quit + wait
+- 图像管理:
+  - invalidate_image() → gen++, 清除 active/pending
+  - drop_cache() → 清除所有缓存
+  - encode(rgb, key, crop_info) → 设置优先级 → cmd_encode
+  - prefetch(key, path) → 不抬优先级 → cmd_prefetch
+- 预测:
+  - predict_async(x, y) → 若未编码则暂存 pending_prompt
+  - predict_box_async(x1,y1,x2,y2) → 同上
+- 信号回调:
+  - _on_encode_done: 释放 busy → 加入 cached_keys → 排空 pending_prompt
+  - _on_predict_done: 检查 gen, 发射 prediction_ready
+
+#### 下载器 download_sam_checkpoint
+- QDialog 带进度条
+- urllib.request 分块下载, .part 临时文件
+- 取消/失败时清理
+
+---
+
+### 5. workers.py — SAM 推理 Worker
+
+#### SamInferenceWorker
+- 拥有: SamPredictor + OrderedDict LRU 缓存
+- 缓存容量: 默认 16 (环境变量 SAM_EMBEDDING_CACHE)
+- 编码:
+  - do_encode(gen, key, rgb):
+    - stale check → cache hit → cache miss: _run_encoder + snapshot
+    - _run_encoder: set_image (带 autocast, 带 NVML 重试)
+    - _snapshot: 保存 features/original_size/input_size
+- 预取:
+  - do_prefetch(gen, key, path):
+    - load_image_rgb → encode → restore 原 active
+- 预测:
+  - do_predict(gen, x, y, crop_info):
+    - crop_info 含 "box" → box prompt
+    - 否则 → point prompt (labels=[1])
+    - multimask_output=True → argmax scores → threshold 0.5
+    - _lift_to_full: 如果 crop 模式, 把小 mask 贴回全图
+- 缓存逐出:
+  - _evict_to_capacity: 不逐出 _active_key
+
+---
+
+### 6. yolo_service.py — YOLO 推理服务
+
+#### YoloService
+- 类似 SamService 的 QThread worker 架构
+- load(weights) → worker.do_load → ultralytics.YOLO(path)
+- predict(bgr, conf, replace) → worker.do_predict
+- busy 标志防止并发请求
+
+#### _build_prediction (结果解析)
+- 优先使用 boxes.xyxy (或 obb.xyxy 退化)
+- Mask 提取优先级:
+  1. masks.data (raw float prototype) → bilinear resize → >0.5 → binary
+  2. masks.xy (原图坐标多边形) → fillPoly
+  3. masks.xyn (归一化多边形) → 缩放后 fillPoly
+- 无 mask 时退化为 box
+- sum<30 的 mask 视为无效
+
+---
+
+### 7. app_input.py — 输入处理
+
+- _on_wheel: 1.12x 缩放
+- _on_mouse_press:
+  - Alt+左/中键 → 平移开始
+  - ROI drawing → 添加/撤销顶点
+  - Ctrl/Shift+左 → SAM predict
+  - 左 → 拖拽画框开始
+  - 右 → delete_at
+- _on_mouse_move: 平移/拖拽更新/hover检测
+- _on_mouse_release: 完成画框 (dx≥5 且 dy≥5)
+- _on_key_press: 全部快捷键分发
+
+---
+
+### 8. app_sam.py — SAM+ROI 控制器
+
+- _load_sam: checkpoint 验证 → 下载提示 → 加载
+- _auto_load_sam: 启动时自动检测权重
+- _encode_current_image: 构建 key(含 ROI bbox) → encode
+- _schedule_encode: 防抖 350ms, cache hit 立即
+- _schedule_prefetch: 防抖 900ms
+- _prefetch_neighbors: 前后各 2 张
+- _sam_predict: ROI check → lazy encode → predict_async
+- _on_sam_prediction: ROI intersection → sum<30 丢弃 → add_mask 或 replace_box
+- ROI 状态机: full → drawing → polygon → full
+  - _roi_close: fillPoly → 可选 crop 编码
+  - _roi_reset: 恢复全图
+
+---
+
+### 9. app.py — 主窗口
+
+- UI 构建: 菜单栏 + 信息栏 + 三栏 Splitter + 日志
+- 导航: _load_directory, _load_current_image, _next/_prev/_skip
+- 保存: _save_current (双格式) + _autosave (编辑即存)
+- 类别管理: add/delete/rename/relabel
+- YOLO: predict → apply_yolo_predictions
+- 事件分发 → mixin
+
+---
+
+## 二、测试实施计划
+
+### Phase 1: 纯逻辑单元测试 (无 GUI 依赖)
+
+| 测试文件 | 覆盖模块 | 测试要点 |
+|----------|----------|----------|
+| test_models.py | models.py | 已有 + 补充边界条件 |
+| test_io_utils.py | io_utils.py | 已有 + 异常路径 |
+| test_yolo_service.py | yolo_service.py | 修复失败 + 补充 |
+| test_colors.py | colors.py | 颜色映射一致性 |
+
+### Phase 2: 服务层 mock 测试
+
+| 测试文件 | 覆盖模块 | 测试要点 |
+|----------|----------|----------|
+| test_sam_service.py | sam_service.py | 状态机, cache, pending_prompt |
+| test_workers.py | workers.py | 编码/预测/缓存/逐出 |
+
+### Phase 3: GUI 组件测试 (pytest-qt)
+
+| 测试文件 | 覆盖模块 | 测试要点 |
+|----------|----------|----------|
+| test_sidebar.py | sidebar.py | 信号发射 |
+| test_right_panel.py | right_panel.py | 类别列表操作 |
+| test_canvas_widget.py | canvas.py (widget) | 事件转发 |
+| test_app_input.py | app_input.py | 键鼠模拟 |
+
+### Phase 4: 集成测试
+
+| 测试文件 | 场景 |
+|----------|------|
+| test_integration.py | 打开目录→标注→保存→重载验证 |
+
+---
+
+## 三、测试运行命令
+
+```bash
+# 全量运行
+/home/liyike/yolo_seg_label_sam/.venv/bin/python -m pytest tests/ -v
+
+# 带覆盖率
+/home/liyike/yolo_seg_label_sam/.venv/bin/python -m pytest tests/ --cov=yolo_sam_labeler --cov-report=term-missing
+
+# 只跑纯逻辑 (不需要 display)
+/home/liyike/yolo_seg_label_sam/.venv/bin/python -m pytest tests/ -v -k "not gui and not widget"
+```

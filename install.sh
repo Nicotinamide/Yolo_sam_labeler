@@ -33,14 +33,6 @@ check_uv() {
     return 1
 }
 
-check_conda() {
-    if command -v conda &> /dev/null; then
-        info "conda 已安装: $(conda --version)"
-        return 0
-    fi
-    return 1
-}
-
 install_uv() {
     info "正在安装 uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -96,49 +88,33 @@ print('  ✓ 所有依赖就绪')
 }
 
 # =============================================================================
-# aarch64 / Jetson 安装路径 (使用 conda)
+# aarch64 / Jetson 安装路径 (使用 uv + 系统 PyQt5)
 # =============================================================================
 
 install_jetson() {
-    info "=== Jetson / aarch64 安装模式 (conda) ==="
+    info "=== Jetson / aarch64 安装模式 (uv + system-site-packages) ==="
 
-    if ! check_conda; then
-        error "Jetson 平台需要 conda。请先安装 miniforge:
-    wget https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-aarch64.sh
-    bash Miniforge3-Linux-aarch64.sh
-    然后重新运行本脚本。"
+    if ! check_uv; then
+        install_uv
     fi
 
-    ENV_NAME="yolo-sam-labeler"
-
-    if conda env list | grep -q "^${ENV_NAME} "; then
-        info "conda 环境 $ENV_NAME 已存在，跳过创建"
-    else
-        info "创建 conda 环境..."
-        conda env create -f environment.yml
+    # Jetson 上 PyQt5 没有 pip wheel，必须用系统 apt 包
+    if ! python3 -c "import PyQt5" 2>/dev/null; then
+        info "安装系统 PyQt5..."
+        sudo apt-get update && sudo apt-get install -y python3-pyqt5
     fi
 
-    info "激活环境并安装 PyTorch..."
-    echo ""
-    echo "  请手动执行以下命令完成安装:"
-    echo ""
-    echo "    conda activate $ENV_NAME"
-    echo "    pip install torch==2.8.0 torchvision==0.23.0 --index-url https://pypi.jetson-ai-lab.io/jp6/cu126"
-    echo "    pip install -e ."
-    echo ""
-    echo "  安装完成后运行:"
-    echo "    yolo-sam-label"
-    echo ""
+    info "创建虚拟环境 (继承系统 site-packages 以使用系统 PyQt5)..."
+    uv venv --system-site-packages --python python3.10 .venv
 
-    # 尝试自动执行
-    eval "$(conda shell.bash hook 2>/dev/null)" 2>/dev/null || true
-    if conda activate "$ENV_NAME" 2>/dev/null; then
-        info "自动激活环境成功，正在安装 PyTorch for Jetson..."
-        pip install torch==2.8.0 torchvision==0.23.0 --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
-        pip install -e .
+    info "安装基础依赖..."
+    uv pip install -e ".[sam,yolo]"
 
-        info "验证安装..."
-        python -c "
+    info "安装 PyTorch for Jetson (JetPack 6 / CUDA 12.6)..."
+    uv pip install torch==2.8.0 torchvision==0.23.0 --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+
+    info "验证安装..."
+    .venv/bin/python -c "
 import torch
 print(f'  PyTorch {torch.__version__}')
 print(f'  CUDA available: {torch.cuda.is_available()}')
@@ -150,12 +126,11 @@ from PyQt5.QtCore import QT_VERSION_STR
 print(f'  PyQt5 {QT_VERSION_STR}')
 print('  ✓ 所有依赖就绪')
 "
-        echo ""
-        info "=== 安装完成 ==="
-        info "运行方式: conda activate $ENV_NAME && yolo-sam-label"
-    else
-        warn "无法自动激活 conda 环境，请按上方提示手动执行。"
-    fi
+
+    echo ""
+    info "=== 安装完成 ==="
+    info "运行方式: uv run yolo-sam-label"
+    info "或者: source .venv/bin/activate && yolo-sam-label"
 }
 
 # =============================================================================

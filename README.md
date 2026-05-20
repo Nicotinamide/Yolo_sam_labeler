@@ -44,21 +44,23 @@ uv run yolo-sam-label
 
 #### Jetson (aarch64 / JetPack 6)
 
-前提：安装 [miniforge](https://github.com/conda-forge/miniforge)
+前提：安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) + 系统 PyQt5
 
 ```bash
-# 1. 创建 conda 环境
-conda env create -f environment.yml
-conda activate yolo-sam-labeler
+# 0. 系统 PyQt5 (apt 安装, pip 上没有 aarch64 wheel)
+sudo apt-get install -y python3-pyqt5
 
-# 2. 安装 Jetson 版 PyTorch
-pip install torch==2.8.0 torchvision==0.23.0 --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+# 1. 创建 venv (继承系统包以使用 apt 的 PyQt5)
+uv venv --system-site-packages --python python3.10 .venv
 
-# 3. 安装本项目
-pip install -e .
+# 2. 安装项目依赖
+uv pip install -e ".[sam,yolo]"
+
+# 3. 安装 Jetson 版 PyTorch
+uv pip install torch==2.8.0 torchvision==0.23.0 --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
 
 # 4. 运行
-yolo-sam-label
+uv run yolo-sam-label
 ```
 
 ---

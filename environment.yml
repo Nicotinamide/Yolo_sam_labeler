@@ -1,0 +1,12 @@
+name: yolo-sam-labeler
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy>=1.21,<2
+  - opencv>=4.5,<5
+  - pyqt>=5.15,<6
+  - pip:
+      - ultralytics>=8.0
+      - "segment-anything @ git+https://github.com/facebookresearch/segment-anything.git"

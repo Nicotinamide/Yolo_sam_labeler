@@ -678,6 +678,16 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
             if len(self.classes) <= 1:
                 self._log("至少保留一个类别。", "warn")
                 return
+            # Determine which class to select after deletion:
+            # prefer the next one in sorted order; if deleting the last, pick the new last.
+            ids = self.classes.sorted_ids()
+            idx = ids.index(cid) if cid in ids else 0
+            # Compute the future id list (without cid)
+            future_ids = [i for i in ids if i != cid]
+            if future_ids:
+                next_idx = min(idx, len(future_ids) - 1)
+                self.current_class_id = future_ids[next_idx]
+            # Now remove — classes_changed signal will use the updated current_class_id
             self.classes.remove(cid)
 
     def _on_class_rename(self, cid: int, name: str):

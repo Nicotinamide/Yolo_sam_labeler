@@ -119,10 +119,31 @@ uv pip install --force-reinstall opencv-python-headless
 
 ### conda 和 uv 冲突？
 
-**只用一个**。`install.sh` 检测到 conda 环境会拒绝运行，避免你创建出"conda 装一半 + uv 装另一半"的破环境。
+`install.sh` 会自动判断默认安装方式：
+- 你已激活非 base 的 conda 环境 → 走 conda 路径，安装到该环境
+- 否则 → 走 uv 路径，创建项目本地 `.venv`
 
-- 想用 uv：`conda deactivate` 后再 `bash install.sh`
-- 想用 conda：跟着上面"任意平台 — conda"小节手动来，**不要用 install.sh**
+**强制指定安装方式：**
+```bash
+bash install.sh --uv                       # 强制 uv，忽略当前 conda
+bash install.sh --conda                    # 强制 conda，必须先激活环境
+bash install.sh --conda-env my-labeler     # 指定 conda 环境名（不存在则创建）
+```
+
+`run.sh` 启动时按优先级：active conda → 项目 `.venv` → `uv run` → 全局命令。
+
+**conda 安装失败 ("Defaulting to user installation because normal site-packages is not writeable")**：
+你的 anaconda 目录归属 root。修复：
+
+```bash
+sudo chown -R $USER:$USER ~/anaconda3
+```
+
+或者直接用 uv 路线：
+```bash
+conda deactivate
+bash install.sh --uv
+```
 
 ---
 

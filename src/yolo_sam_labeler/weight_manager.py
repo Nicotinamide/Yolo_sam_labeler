@@ -15,8 +15,17 @@ from .sam_service import (
     SAM2_MODEL_URLS, SAM2_MODEL_FILES, SAM2_FILE_SIZES,
 )
 
-# Default search directory for weights — use a dedicated folder in user home
-_DEFAULT_WEIGHT_DIR = os.path.join(os.path.expanduser("~"), ".sam_weights")
+# Default search directory for SAM weights — 'weights/sam/' under project root.
+def _default_weight_dir() -> str:
+    pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # .../src
+    project_root = os.path.dirname(pkg_dir)
+    candidate = os.path.join(project_root, "weights", "sam")
+    if "site-packages" in pkg_dir:
+        candidate = os.path.join(os.getcwd(), "weights", "sam")
+    return candidate
+
+
+_DEFAULT_WEIGHT_DIR = _default_weight_dir()
 
 
 def _human_size(size_bytes: int) -> str:

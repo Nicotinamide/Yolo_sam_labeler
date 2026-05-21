@@ -528,12 +528,18 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
 
     @staticmethod
     def _fallback_sam_checkpoint(model_type: str) -> str:
-        filename = SAM_MODEL_FILES.get(model_type, "sam_vit_h_4b8939.pth")
+        from .sam_service import SAM2_MODEL_FILES
+        filename = SAM_MODEL_FILES.get(model_type) or SAM2_MODEL_FILES.get(model_type, "sam_vit_h_4b8939.pth")
+        # Project root = parent of src/
+        pkg_dir = os.path.dirname(os.path.abspath(__file__))  # .../src/yolo_sam_labeler/
+        src_dir = os.path.dirname(pkg_dir)
+        project_root = os.path.dirname(src_dir)
         candidates = [
-            os.path.join(os.path.expanduser("~"), ".sam_weights", filename),
-            os.path.abspath(filename),
-            os.path.join(os.getcwd(), filename),
-            os.path.join(os.path.expanduser("~"), "yolo_seg_label_sam", filename),
+            os.path.join(project_root, "weights", "sam", filename),  # weights/sam/
+            os.path.join(os.getcwd(), "weights", "sam", filename),    # CWD/weights/sam/
+            os.path.join(project_root, "weights", filename),          # legacy weights/
+            os.path.abspath(filename),                                 # just the filename
+            os.path.join(os.getcwd(), filename),                       # CWD/filename
         ]
         for path in candidates:
             if os.path.isfile(path):
@@ -935,8 +941,16 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
             self._load_sam()
 
     def _pick_yolo_weights(self):
+        # Default to weights/yolo/ in project root
+        pkg_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(pkg_dir))
+        default_yolo_dir = os.path.join(project_root, "weights", "yolo")
+        start = (
+            os.path.dirname(self.yolo_weights_path)
+            or (default_yolo_dir if os.path.isdir(default_yolo_dir) else ".")
+        )
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择 YOLO 权重", os.path.dirname(self.yolo_weights_path) or ".",
+            self, "选择 YOLO 权重", start,
             "PyTorch (*.pt);;All (*.*)"
         )
         if path:

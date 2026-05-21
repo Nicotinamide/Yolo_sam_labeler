@@ -78,13 +78,21 @@ import cv2
 print(f'  OpenCV {cv2.__version__}')
 from PyQt5.QtCore import QT_VERSION_STR
 print(f'  PyQt5 {QT_VERSION_STR}')
+import segment_anything
+print(f'  SAM 1: ✓')
+try:
+    import sam2
+    print(f'  SAM 2: ✓')
+except ImportError:
+    print(f'  SAM 2: ✗ (可选，不影响 SAM 1 使用)')
 print('  ✓ 所有依赖就绪')
 "
 
     echo ""
     info "=== 安装完成 ==="
-    info "运行方式: uv run yolo-sam-label"
-    info "或者激活环境后运行: source .venv/bin/activate && yolo-sam-label"
+    info "运行方式（推荐）: bash run.sh"
+    info "或者: uv run yolo-sam-label"
+    info "或者: source .venv/bin/activate && yolo-sam-label"
 }
 
 # =============================================================================
@@ -124,12 +132,20 @@ import cv2
 print(f'  OpenCV {cv2.__version__}')
 from PyQt5.QtCore import QT_VERSION_STR
 print(f'  PyQt5 {QT_VERSION_STR}')
+import segment_anything
+print(f'  SAM 1: ✓')
+try:
+    import sam2
+    print(f'  SAM 2: ✓')
+except ImportError:
+    print(f'  SAM 2: ✗ (可选，不影响 SAM 1 使用)')
 print('  ✓ 所有依赖就绪')
 "
 
     echo ""
     info "=== 安装完成 ==="
-    info "运行方式: uv run yolo-sam-label"
+    info "运行方式（推荐）: bash run.sh"
+    info "或者: uv run yolo-sam-label"
     info "或者: source .venv/bin/activate && yolo-sam-label"
 }
 

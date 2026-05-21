@@ -105,6 +105,18 @@ yolo-sam-label
 
 PyTorch 的安装 URL 取决于你的 CUDA 版本和平台（x86/arm/Mac），无法用标准 `pyproject.toml` 统一描述。这是所有深度学习桌面项目的通行做法。`install.sh` 已经帮你处理了这一步。
 
+### 启动报 "Cannot mix incompatible Qt library" 怎么办？
+
+`ultralytics` 会拉一个带 Qt 的 `opencv-python`，跟 PyQt5 自带的 Qt 冲突。修复：
+
+```bash
+# 在 .venv 激活后
+uv pip uninstall opencv-python -y
+uv pip install --force-reinstall opencv-python-headless
+```
+
+`install.sh` 默认已经帮你换成 headless 版了，手动安装时才需要这一步。
+
 ---
 
 ## 使用

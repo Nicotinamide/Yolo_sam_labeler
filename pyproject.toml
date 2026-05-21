@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "numpy>=1.21,<2",
-    "opencv-python>=4.5.0,<5",
+    # Use headless build to avoid Qt library conflict with PyQt5.
+    # opencv-python ships its own Qt 5.15.x which clashes with PyQt5's Qt.
+    "opencv-python-headless>=4.5.0,<5",
     "PyQt5>=5.15.0,<6; sys_platform != 'linux' or platform_machine != 'aarch64'",
 ]
 

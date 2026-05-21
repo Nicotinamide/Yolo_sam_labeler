@@ -57,6 +57,12 @@ install_x86() {
     info "创建虚拟环境并安装基础依赖..."
     uv sync --extra all
 
+    # ultralytics pulls opencv-python (with Qt 5.15.x), which conflicts with PyQt5's Qt.
+    # Force reinstall the headless build to fix the "Cannot mix incompatible Qt library" crash.
+    info "切换到 opencv-python-headless 避免 Qt 冲突..."
+    uv pip uninstall opencv-python -y 2>/dev/null || true
+    uv pip install --force-reinstall opencv-python-headless
+
     info "安装 PyTorch (GPU CUDA 12.4)..."
     echo ""
     echo "  如果没有 NVIDIA GPU, 按 Ctrl+C 中断, 然后运行:"
@@ -117,6 +123,12 @@ install_jetson() {
 
     info "安装基础依赖..."
     uv pip install -e ".[sam,yolo]"
+
+    # ultralytics pulls opencv-python (with Qt) — replace with headless to avoid Qt conflict.
+    # On Jetson this rarely triggers (system PyQt5 is matched), but keep it for safety.
+    info "切换到 opencv-python-headless 避免 Qt 冲突..."
+    uv pip uninstall opencv-python -y 2>/dev/null || true
+    uv pip install --force-reinstall opencv-python-headless
 
     info "安装 PyTorch for Jetson (JetPack 6 / CUDA 12.6)..."
     uv pip install torch==2.8.0 torchvision==0.23.0 --index-url https://pypi.jetson-ai-lab.io/jp6/cu126

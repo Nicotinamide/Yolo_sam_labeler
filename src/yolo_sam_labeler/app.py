@@ -31,6 +31,7 @@ from .sam_service import SamService, SAM_MODEL_FILES
 from .yolo_service import YoloService
 from .app_sam import SamControllerMixin
 from .app_input import InputHandlerMixin
+from .weight_manager import open_weight_manager
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +213,9 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         act_sam_ckpt = QAction("选择 SAM 权重…", self)
         act_sam_ckpt.triggered.connect(self._pick_sam_ckpt)
         model_menu.addAction(act_sam_ckpt)
+        act_weight_mgr = QAction("SAM 权重管理…", self)
+        act_weight_mgr.triggered.connect(self._open_weight_manager)
+        model_menu.addAction(act_weight_mgr)
         act_load_sam = QAction("加载 SAM", self)
         act_load_sam.triggered.connect(self._load_sam)
         model_menu.addAction(act_load_sam)
@@ -817,6 +821,19 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
             self.sidebar.set_checkpoint_label(path)
             self._remember_paths()
             self._log(f"SAM 权重: {path}", "ok")
+
+    def _open_weight_manager(self):
+        """Open the SAM weight manager to download and select checkpoints."""
+        weight_dir = os.path.dirname(self.sam_checkpoint) if self.sam_checkpoint else "."
+        path, model_type = open_weight_manager(self, weight_dir=weight_dir)
+        if path and model_type:
+            self.sam_checkpoint = path
+            self.model_type = model_type
+            self.sidebar.set_checkpoint_label(path)
+            self.sidebar.set_model_type(model_type)
+            self._remember_paths()
+            self._log(f"已选择 SAM 权重: {os.path.basename(path)} ({model_type})", "ok")
+            self._load_sam()
 
     def _pick_yolo_weights(self):
         path, _ = QFileDialog.getOpenFileName(

@@ -200,6 +200,8 @@ class SamService(QObject):
             self._pending_prompt = ("point", (x, y))
             return False
         if self._is_busy:
+            # Busy with encode/prefetch — queue the click for when it completes.
+            self._pending_prompt = ("point", (x, y))
             return False
         self._is_busy = True
         self._worker.cmd_predict.emit(self._gen, int(x), int(y), self._crop_info)
@@ -213,6 +215,7 @@ class SamService(QObject):
             self._pending_prompt = ("box", box)
             return False
         if self._is_busy:
+            self._pending_prompt = ("box", box)
             return False
         self._is_busy = True
         info = dict(self._crop_info) if self._crop_info else {}
@@ -319,11 +322,24 @@ class SamService(QObject):
             return
         self._is_busy = False
         self.prediction_ready.emit(mask, gen)
+        # Drain queued click that arrived while this prediction was running.
+        self._drain_pending()
 
     def _on_predict_failed(self, msg: str):
         self._is_busy = False
         self.prediction_failed.emit(msg)
         self.error.emit(msg)
+        self._drain_pending()
+
+    def _drain_pending(self):
+        """Execute a queued point/box prompt if the service is free."""
+        if self._pending_prompt and not self._is_busy and self.is_encoded:
+            kind, payload = self._pending_prompt
+            self._pending_prompt = None
+            if kind == "point":
+                self.predict_async(*payload)
+            elif kind == "box":
+                self.predict_box_async(*payload)
 
 
 # ---------------------------------------------------------------------------

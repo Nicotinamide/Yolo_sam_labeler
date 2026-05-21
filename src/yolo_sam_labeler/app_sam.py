@@ -87,7 +87,8 @@ class SamControllerMixin:
             self._log("自动加载 SAM 权重。", "info")
             self._load_sam()
         elif self.sam_checkpoint:
-            self._log(f"SAM 权重不存在，未自动加载: {self.sam_checkpoint}", "warn")
+            # First launch or missing file — offer the weight manager
+            self._log("SAM 权重不存在，请通过「模型 → SAM 权重管理」下载。", "warn")
 
     def _on_load_sam(self, ckpt: str, model_type: str):
         if ckpt:

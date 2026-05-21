@@ -117,6 +117,13 @@ uv pip install --force-reinstall opencv-python-headless
 
 `install.sh` 默认已经帮你换成 headless 版了，手动安装时才需要这一步。
 
+### conda 和 uv 冲突？
+
+**只用一个**。`install.sh` 检测到 conda 环境会拒绝运行，避免你创建出"conda 装一半 + uv 装另一半"的破环境。
+
+- 想用 uv：`conda deactivate` 后再 `bash install.sh`
+- 想用 conda：跟着上面"任意平台 — conda"小节手动来，**不要用 install.sh**
+
 ---
 
 ## 使用

@@ -171,6 +171,26 @@ echo "║     YOLO SAM Labeler 安装向导            ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
 
+# 防止 conda 环境和 uv 创建的 .venv 互相打架。如果用户在 conda 环境中运行，
+# 给出清晰的提示再退出 — 否则 uv 会无视 conda 创建一个新 .venv 导致两套环境。
+if [ -n "$CONDA_PREFIX" ] && [ "$CONDA_DEFAULT_ENV" != "base" ]; then
+    echo "⚠ 检测到已激活 conda 环境: $CONDA_DEFAULT_ENV"
+    echo ""
+    echo "  install.sh 走 uv 路线，会和 conda 冲突。请二选一:"
+    echo ""
+    echo "  方式 A (推荐 / 用 uv): 先退出 conda 再运行"
+    echo "    conda deactivate"
+    echo "    bash install.sh"
+    echo ""
+    echo "  方式 B (用 conda): 在当前 conda 环境里手动安装"
+    echo "    pip install -e \".[sam,yolo]\""
+    echo "    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124"
+    echo "    pip install --force-reinstall opencv-python-headless"
+    echo "    bash run.sh"
+    echo ""
+    exit 1
+fi
+
 case "$ARCH" in
     x86_64|amd64)
         install_x86

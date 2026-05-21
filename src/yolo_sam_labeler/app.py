@@ -213,7 +213,7 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         tool_menu.addAction(act_convert)
 
         model_menu = mb.addMenu("模型")
-        act_sam_ckpt = QAction("选择并加载 SAM 权重…", self)
+        act_sam_ckpt = QAction("加载 SAM 权重…", self)
         act_sam_ckpt.triggered.connect(self._pick_sam_ckpt)
         model_menu.addAction(act_sam_ckpt)
         act_weight_mgr = QAction("SAM 权重管理…", self)
@@ -291,7 +291,7 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         self.classes.classes_changed.connect(self._on_classes_changed)
 
         # Sidebar signals
-        self.sidebar.load_sam_requested.connect(self._on_load_sam)
+        self.sidebar.weight_manager_requested.connect(self._open_weight_manager)
         self.sidebar.yolo_predict_requested.connect(self._on_yolo_predict)
         self.sidebar.roi_draw_requested.connect(self._roi_start_draw)
         self.sidebar.roi_close_requested.connect(self._roi_close)
@@ -420,8 +420,10 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
             self._log(f"类别文件保存失败: {exc}", "warn")
 
     def _sync_sidebar_state(self):
-        self.sidebar.set_checkpoint_label(self.sam_checkpoint)
-        self.sidebar.set_model_type(self.model_type)
+        if self.sam_checkpoint and os.path.isfile(self.sam_checkpoint):
+            self.sidebar.set_sam_status(os.path.basename(self.sam_checkpoint))
+        else:
+            self.sidebar.set_sam_status("未加载")
         self.sidebar.set_yolo_weights_label(self.yolo_weights_path)
 
     def _remember_paths(self):
@@ -528,6 +530,7 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
     def _fallback_sam_checkpoint(model_type: str) -> str:
         filename = SAM_MODEL_FILES.get(model_type, "sam_vit_h_4b8939.pth")
         candidates = [
+            os.path.join(os.path.expanduser("~"), ".sam_weights", filename),
             os.path.abspath(filename),
             os.path.join(os.getcwd(), filename),
             os.path.join(os.path.expanduser("~"), "yolo_seg_label_sam", filename),
@@ -634,8 +637,8 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         finally:
             self._loading_image = False
 
-        # SAM encode (if model ready and not lazy)
-        if self.sam.is_ready and not self.sidebar.chk_lazy.isChecked():
+        # SAM encode (if model ready)
+        if self.sam.is_ready:
             self._schedule_encode("切换图像")
 
         self._schedule_prefetch()
@@ -916,10 +919,9 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         )
         if path:
             self.sam_checkpoint = path
-            self.sidebar.set_checkpoint_label(path)
             self._remember_paths()
             self._log(f"SAM 权重: {path}", "ok")
-            self._load_sam()  # Auto-load after selection
+            self._load_sam()
 
     def _open_weight_manager(self):
         """Open the SAM weight manager to download and select checkpoints."""
@@ -928,8 +930,6 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         if path and model_type:
             self.sam_checkpoint = path
             self.model_type = model_type
-            self.sidebar.set_checkpoint_label(path)
-            self.sidebar.set_model_type(model_type)
             self._remember_paths()
             self._log(f"已选择 SAM 权重: {os.path.basename(path)} ({model_type})", "ok")
             self._load_sam()

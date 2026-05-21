@@ -12,8 +12,8 @@ from PyQt5.QtWidgets import (
 
 from .sam_service import SAM_MODEL_URLS, SAM_MODEL_FILES, SAM_FILE_SIZES
 
-# Default search directory for weights
-_DEFAULT_WEIGHT_DIR = os.path.abspath(".")
+# Default search directory for weights — use a dedicated folder in user home
+_DEFAULT_WEIGHT_DIR = os.path.join(os.path.expanduser("~"), ".sam_weights")
 
 
 def _human_size(size_bytes: int) -> str:
@@ -28,21 +28,21 @@ def _human_size(size_bytes: int) -> str:
 _MODEL_INFO = [
     {
         "type": "vit_h",
-        "name": "ViT-H (最精确)",
+        "name": "SAM 1 ViT-H (最精确)",
         "desc": "最高精度，GPU 编码 ~0.3s",
         "size": SAM_FILE_SIZES.get("vit_h", 0),
         "file": SAM_MODEL_FILES.get("vit_h", ""),
     },
     {
         "type": "vit_l",
-        "name": "ViT-L (平衡)",
+        "name": "SAM 1 ViT-L (平衡)",
         "desc": "精度与速度平衡，GPU 编码 ~0.2s",
         "size": SAM_FILE_SIZES.get("vit_l", 0),
         "file": SAM_MODEL_FILES.get("vit_l", ""),
     },
     {
         "type": "vit_b",
-        "name": "ViT-B (最快)",
+        "name": "SAM 1 ViT-B (最快)",
         "desc": "速度优先，GPU 编码 ~0.1s，适合 Jetson/CPU",
         "size": SAM_FILE_SIZES.get("vit_b", 0),
         "file": SAM_MODEL_FILES.get("vit_b", ""),

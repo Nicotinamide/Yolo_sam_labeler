@@ -44,15 +44,13 @@ class SamControllerMixin:
     # ------------------------------------------------------------------
 
     def _load_sam(self):
-        self.model_type = self.sidebar.combo_model.currentText()
         ckpt = self.sam_checkpoint
         mt = self.model_type
         if not ckpt:
             ckpt = self._fallback_sam_checkpoint(mt)
             self.sam_checkpoint = ckpt
-            self.sidebar.set_checkpoint_label(ckpt)
         if not ckpt:
-            QMessageBox.warning(self, "无法加载", "请先选择 SAM 权重文件。")
+            QMessageBox.warning(self, "无法加载", "请先通过「模型 → SAM 权重管理」选择权重。")
             return
         if not os.path.isfile(ckpt):
             default_name = SAM_MODEL_FILES.get(mt)
@@ -82,19 +80,16 @@ class SamControllerMixin:
             return
         if not self.sam_checkpoint:
             self.sam_checkpoint = self._fallback_sam_checkpoint(self.model_type)
-            self.sidebar.set_checkpoint_label(self.sam_checkpoint)
         if self.sam_checkpoint and os.path.isfile(self.sam_checkpoint):
             self._log("自动加载 SAM 权重。", "info")
             self._load_sam()
         elif self.sam_checkpoint:
-            # First launch or missing file — offer the weight manager
             self._log("SAM 权重不存在，请通过「模型 → SAM 权重管理」下载。", "warn")
 
     def _on_load_sam(self, ckpt: str, model_type: str):
         if ckpt:
             self.sam_checkpoint = ckpt
         self.model_type = model_type
-        self.sidebar.set_checkpoint_label(self.sam_checkpoint)
         self._load_sam()
 
     def _on_sam_ready(self):
@@ -109,6 +104,7 @@ class SamControllerMixin:
         }.get((device_str, self.model_type), "")
         suffix = f"，单图编码 {budget}" if budget else ""
         self._log(f"SAM 模型已加载 ({self.model_type} on {device_str}){suffix}", "ok")
+        self.sidebar.set_sam_status(f"{self.model_type} 已加载 ✓")
         if device_str == "CPU" and self.model_type == "vit_h":
             self._log("提示：CPU 跑 vit_h 较慢，可在侧栏切换到 vit_b 提速。", "info")
         self._encode_debounce.stop()

@@ -38,6 +38,7 @@ class Sidebar(QWidget):
 
     load_sam_requested = pyqtSignal(str, str)       # ckpt, model_type
     yolo_predict_requested = pyqtSignal(float, bool)  # conf, replace
+    weight_manager_requested = pyqtSignal()
     roi_draw_requested = pyqtSignal()
     roi_close_requested = pyqtSignal()
     roi_pop_requested = pyqtSignal()
@@ -46,7 +47,6 @@ class Sidebar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("Sidebar")
-        self._checkpoint_path = ""
         self._build()
 
     def _build(self):
@@ -70,26 +70,14 @@ class Sidebar(QWidget):
         sam_lay.setFormAlignment(Qt.AlignTop)
         sam_lay.setContentsMargins(6, 6, 6, 6)
         sam_lay.setHorizontalSpacing(6)
-        self.combo_model = QComboBox()
-        self.combo_model.addItems(["vit_h", "vit_l", "vit_b"])
-        self.combo_model.setMinimumWidth(0)
-        self.combo_model.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        sam_lay.addRow("模型:", self.combo_model)
-        self.lbl_ckpt = QLabel("未选择")
-        self.lbl_ckpt.setWordWrap(True)
-        self.lbl_ckpt.setMinimumWidth(0)
-        self.lbl_ckpt.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        sam_lay.addRow("权重:", self.lbl_ckpt)
-        self.chk_lazy = QCheckBox("延迟编码")
-        self.chk_lazy.setChecked(False)
-        self.chk_lazy.setToolTip(
-            "勾选后切图不立即编码，第一次点击 SAM 时才编码。\n"
-            "默认关闭：相邻图片会自动后台预编码并缓存，切回旧图近乎即时。"
-        )
-        sam_lay.addRow(self.chk_lazy)
-        self.btn_load = _make_compact_btn("加载 SAM 权重", "加载选中的 SAM 模型权重")
-        self.btn_load.clicked.connect(self._emit_load)
-        sam_lay.addRow(self.btn_load)
+        self.lbl_sam_status = QLabel("未加载")
+        self.lbl_sam_status.setWordWrap(True)
+        self.lbl_sam_status.setMinimumWidth(0)
+        self.lbl_sam_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        sam_lay.addRow("权重:", self.lbl_sam_status)
+        self.btn_weight_mgr = _make_compact_btn("加载 SAM 权重", "下载/选择 SAM 权重并加载")
+        self.btn_weight_mgr.clicked.connect(self.weight_manager_requested.emit)
+        sam_lay.addRow(self.btn_weight_mgr)
         layout.addWidget(sam_grp)
 
         # --- YOLO group ---
@@ -165,22 +153,9 @@ class Sidebar(QWidget):
         scroll.setWidget(inner)
         outer.addWidget(scroll)
 
-    def _emit_load(self):
-        self.load_sam_requested.emit(
-            self._checkpoint_path, self.combo_model.currentText()
-        )
-
-    def set_checkpoint_label(self, path: str):
-        self._checkpoint_path = path or ""
-        if not path:
-            self.lbl_ckpt.setText("未选择")
-            return
-        self.lbl_ckpt.setText(os.path.basename(path))
-
-    def set_model_type(self, model_type: str):
-        idx = self.combo_model.findText(model_type)
-        if idx >= 0:
-            self.combo_model.setCurrentIndex(idx)
+    def set_sam_status(self, text: str):
+        """Update the SAM status label (e.g. 'vit_h 已加载' or '未加载')."""
+        self.lbl_sam_status.setText(text)
 
     def set_yolo_weights_label(self, text: str):
         self.lbl_yolo_w.setText(os.path.basename(text) if text else "未加载")

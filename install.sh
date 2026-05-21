@@ -167,7 +167,7 @@ install_uv_x86() {
 
     info "切换到 opencv-python-headless 避免 Qt 冲突..."
     uv pip uninstall opencv-python -y 2>/dev/null || true
-    uv pip install --force-reinstall opencv-python-headless
+    uv pip install --force-reinstall "opencv-python-headless>=4.5,<4.12"
 
     local pt_choice
     pt_choice=$(prompt_pytorch_choice)
@@ -204,7 +204,7 @@ install_uv_jetson() {
 
     info "切换到 opencv-python-headless..."
     uv pip uninstall opencv-python -y 2>/dev/null || true
-    uv pip install --force-reinstall opencv-python-headless
+    uv pip install --force-reinstall "opencv-python-headless>=4.5,<4.12"
 
     install_pytorch_for "uv pip" "jetson"
 
@@ -219,6 +219,37 @@ install_uv_jetson() {
 # conda 路径 (用户已经在 conda 环境里)
 # =============================================================================
 
+# 检测 ~/.local 里的污染包 (之前因为 pip "Defaulting to user installation" 装错地方的残留)
+check_user_local_pollution() {
+    local user_site="$HOME/.local/lib/python3.10/site-packages"
+    local user_site_311="$HOME/.local/lib/python3.11/site-packages"
+    local user_site_312="$HOME/.local/lib/python3.12/site-packages"
+    local found=""
+    for d in "$user_site" "$user_site_311" "$user_site_312"; do
+        if [ -d "$d/torch" ] || [ -d "$d/nvidia" ]; then
+            found="$found $d"
+        fi
+    done
+    if [ -n "$found" ]; then
+        warn "发现 ~/.local 里有 torch / nvidia 残留 (之前 pip 装错地方留下的):"
+        for d in $found; do
+            echo "    $d"
+        done
+        echo ""
+        warn "这些会跟 conda 环境里的版本冲突 (例如 libcudnn 版本不匹配)。"
+        local clean
+        read -r -p "  是否清理? (y/N): " clean
+        if [[ "$clean" =~ ^[Yy]$ ]]; then
+            for d in $found; do
+                rm -rf "$d/torch"* "$d/nvidia"* "$d/triton"* 2>/dev/null
+            done
+            info "已清理"
+        else
+            warn "已跳过。如果后续 import torch 报 libcudnn 错，请手动清理"
+        fi
+    fi
+}
+
 install_conda() {
     info "=== conda 安装路径 (环境: $CONDA_DEFAULT_ENV) ==="
 
@@ -228,17 +259,35 @@ install_conda() {
     fi
 
     verify_writable_site_packages "$py"
+    check_user_local_pollution
 
-    info "安装项目依赖..."
-    "$py" -m pip install -e ".[sam,yolo]"
+    # 强制 pip 不要 fall back 到 ~/.local。即使 site-packages 真的不可写，
+    # 我们也要让它失败而不是默默装到错的地方。
+    export PYTHONNOUSERSITE=1
+    export PIP_USER=0
 
-    info "切换到 opencv-python-headless..."
-    "$py" -m pip uninstall opencv-python -y 2>/dev/null || true
-    "$py" -m pip install --force-reinstall opencv-python-headless
+    # pip 命令缩写
+    local PIP="$py -m pip --no-cache-dir"
+
+    info "安装项目依赖 (一次性解析以避免版本冲突)..."
+    $PIP install -e ".[sam,yolo]"
+
+    info "切换到 opencv-python-headless (钉版本以避免 numpy 被升到 2.x)..."
+    $PIP uninstall opencv-python -y 2>/dev/null || true
+    $PIP install --force-reinstall "opencv-python-headless>=4.5,<4.12"
 
     local pt_choice
     pt_choice=$(prompt_pytorch_choice)
-    install_pytorch_for "$py -m pip" "$pt_choice"
+    install_pytorch_for "$PIP" "$pt_choice"
+
+    # 最后一次校验：检查 numpy 没有被任何步骤升级到 2.x
+    info "校验依赖一致性..."
+    local numpy_ver
+    numpy_ver=$("$py" -c "import numpy; print(numpy.__version__)" 2>/dev/null || echo "")
+    if [[ "$numpy_ver" == 2.* ]]; then
+        warn "numpy 被某个包升到 $numpy_ver，回退到 1.26..."
+        $PIP install --force-reinstall "numpy>=1.21,<2"
+    fi
 
     verify_install "$py"
 

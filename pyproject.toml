@@ -10,9 +10,10 @@ readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "numpy>=1.21,<2",
+    # Pin to <4.12 — opencv-python-headless 4.13+ requires numpy>=2 which conflicts
+    # with our numpy<2 constraint (kept for sam-2 + segment-anything compatibility).
     # Use headless build to avoid Qt library conflict with PyQt5.
-    # opencv-python ships its own Qt 5.15.x which clashes with PyQt5's Qt.
-    "opencv-python-headless>=4.5.0,<5",
+    "opencv-python-headless>=4.5.0,<4.12",
     "PyQt5>=5.15.0,<6; sys_platform != 'linux' or platform_machine != 'aarch64'",
 ]
 

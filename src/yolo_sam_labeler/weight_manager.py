@@ -10,7 +10,10 @@ from PyQt5.QtWidgets import (
     QAbstractItemView, QMessageBox, QFileDialog, QApplication,
 )
 
-from .sam_service import SAM_MODEL_URLS, SAM_MODEL_FILES, SAM_FILE_SIZES
+from .sam_service import (
+    SAM_MODEL_URLS, SAM_MODEL_FILES, SAM_FILE_SIZES,
+    SAM2_MODEL_URLS, SAM2_MODEL_FILES, SAM2_FILE_SIZES,
+)
 
 # Default search directory for weights — use a dedicated folder in user home
 _DEFAULT_WEIGHT_DIR = os.path.join(os.path.expanduser("~"), ".sam_weights")
@@ -25,13 +28,16 @@ def _human_size(size_bytes: int) -> str:
 
 
 # Model metadata for display
+# Model metadata for display — both SAM 1 and SAM 2
 _MODEL_INFO = [
+    # --- SAM 1 ---
     {
         "type": "vit_h",
         "name": "SAM 1 ViT-H (最精确)",
-        "desc": "最高精度，GPU 编码 ~0.3s",
+        "desc": "原版最高精度，GPU 编码 ~0.3s",
         "size": SAM_FILE_SIZES.get("vit_h", 0),
         "file": SAM_MODEL_FILES.get("vit_h", ""),
+        "url_dict": SAM_MODEL_URLS,
     },
     {
         "type": "vit_l",
@@ -39,13 +45,48 @@ _MODEL_INFO = [
         "desc": "精度与速度平衡，GPU 编码 ~0.2s",
         "size": SAM_FILE_SIZES.get("vit_l", 0),
         "file": SAM_MODEL_FILES.get("vit_l", ""),
+        "url_dict": SAM_MODEL_URLS,
     },
     {
         "type": "vit_b",
         "name": "SAM 1 ViT-B (最快)",
-        "desc": "速度优先，GPU 编码 ~0.1s，适合 Jetson/CPU",
+        "desc": "速度优先，适合 Jetson/CPU",
         "size": SAM_FILE_SIZES.get("vit_b", 0),
         "file": SAM_MODEL_FILES.get("vit_b", ""),
+        "url_dict": SAM_MODEL_URLS,
+    },
+    # --- SAM 2.1 (recommended for new projects) ---
+    {
+        "type": "sam2.1_hiera_tiny",
+        "name": "SAM 2.1 Hiera Tiny",
+        "desc": "SAM 2 最小，约 156 MB，速度最快",
+        "size": SAM2_FILE_SIZES.get("sam2.1_hiera_tiny", 0),
+        "file": SAM2_MODEL_FILES.get("sam2.1_hiera_tiny", ""),
+        "url_dict": SAM2_MODEL_URLS,
+    },
+    {
+        "type": "sam2.1_hiera_small",
+        "name": "SAM 2.1 Hiera Small",
+        "desc": "SAM 2 小型，约 184 MB",
+        "size": SAM2_FILE_SIZES.get("sam2.1_hiera_small", 0),
+        "file": SAM2_MODEL_FILES.get("sam2.1_hiera_small", ""),
+        "url_dict": SAM2_MODEL_URLS,
+    },
+    {
+        "type": "sam2.1_hiera_base_plus",
+        "name": "SAM 2.1 Hiera Base+",
+        "desc": "SAM 2 中型，约 323 MB",
+        "size": SAM2_FILE_SIZES.get("sam2.1_hiera_base_plus", 0),
+        "file": SAM2_MODEL_FILES.get("sam2.1_hiera_base_plus", ""),
+        "url_dict": SAM2_MODEL_URLS,
+    },
+    {
+        "type": "sam2.1_hiera_large",
+        "name": "SAM 2.1 Hiera Large (最精确)",
+        "desc": "SAM 2 最大，约 898 MB，比 SAM 1 ViT-H 精度更好且更小",
+        "size": SAM2_FILE_SIZES.get("sam2.1_hiera_large", 0),
+        "file": SAM2_MODEL_FILES.get("sam2.1_hiera_large", ""),
+        "url_dict": SAM2_MODEL_URLS,
     },
 ]
 
@@ -172,7 +213,7 @@ class WeightManagerDialog(QDialog):
         self._on_selection_changed()
 
     def _path_for(self, model_type: str) -> str:
-        filename = SAM_MODEL_FILES.get(model_type, "")
+        filename = SAM_MODEL_FILES.get(model_type) or SAM2_MODEL_FILES.get(model_type, "")
         return os.path.join(self._weight_dir, filename)
 
     def _on_selection_changed(self):
@@ -209,7 +250,7 @@ class WeightManagerDialog(QDialog):
         info = _MODEL_INFO[row]
         model_type = info["type"]
         save_path = self._path_for(model_type)
-        url = SAM_MODEL_URLS.get(model_type)
+        url = info["url_dict"].get(model_type)
         if not url:
             return
 

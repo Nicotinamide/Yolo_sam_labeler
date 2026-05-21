@@ -1,7 +1,10 @@
 """SAM inference worker — runs in a background QThread.
 
+Backend-agnostic: delegates the actual SAM ops to a :class:`SamBackend` so
+the worker treats SAM 1 / SAM 2 (and future versions) uniformly.
+
 The worker owns an LRU cache of image embeddings keyed by user-supplied
-strings (typically absolute file paths plus a ROI suffix).  Switching the
+strings (typically absolute file paths plus a ROI suffix). Switching the
 *active* image therefore costs an ``O(1)`` state restore instead of a full
 image-encoder forward pass, and neighboring images can be warmed up in
 advance via :pyattr:`cmd_prefetch`.
@@ -9,37 +12,32 @@ advance via :pyattr:`cmd_prefetch`.
 
 import os
 from collections import OrderedDict
-from contextlib import nullcontext
 from typing import Optional
 
 import numpy as np
 import torch
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
 
-from segment_anything import sam_model_registry, SamPredictor
-
+from .backends import SamBackend, SamBackendError, create_backend
 from .io_utils import load_image_rgb
 
 
 # Override with environment variable: ``SAM_EMBEDDING_CACHE=4`` etc.
-# Default 16: covers a typical "browse back and forth across the last
-# ~16 images" workflow without re-encoding. ViT-H embedding is ~4 MB so the
-# cache stays under 70 MB even at this size.
 _DEFAULT_CAPACITY = max(1, int(os.environ.get("SAM_EMBEDDING_CACHE", "16")))
 
 
 class SamInferenceWorker(QObject):
-    """Background worker that owns the SAM model and an embedding cache."""
+    """Background worker that owns the SAM backend and an embedding cache."""
 
     # --- commands (main → worker) ---
-    cmd_load = pyqtSignal(str, str, str)        # ckpt, model_type, device_str
+    cmd_load = pyqtSignal(str, str, str)        # ckpt, model_type_hint, device_str
     cmd_encode = pyqtSignal(int, str, object)   # gen, key, rgb (HWC uint8)
     cmd_prefetch = pyqtSignal(int, str, str)    # gen, key, image_path
     cmd_predict = pyqtSignal(int, int, int, object)  # gen, x, y, crop_info | None
     cmd_drop_cache = pyqtSignal()
 
     # --- responses (worker → main) ---
-    sig_model_ready = pyqtSignal()
+    sig_model_ready = pyqtSignal(str)             # backend label e.g. "SAM 1 vit_h"
     sig_load_failed = pyqtSignal(str)
     sig_encode_done = pyqtSignal(int, str)        # gen, key
     sig_encode_failed = pyqtSignal(str)
@@ -51,26 +49,15 @@ class SamInferenceWorker(QObject):
     def __init__(self, capacity: int = _DEFAULT_CAPACITY,
                  priority_provider=None):
         super().__init__()
-        self._predictor: Optional[SamPredictor] = None
+        self._backend: Optional[SamBackend] = None
         self._cache: "OrderedDict[str, dict]" = OrderedDict()
         self._capacity: int = max(1, int(capacity))
         self._active_key: Optional[str] = None
         self._device: Optional[torch.device] = None
-        self._use_autocast: bool = False
-        # Optional callback returning (priority_gen, priority_key) — set by
-        # the service so the worker can skip stale prefetch requests.
         self._priority_provider = priority_provider
 
     def _is_stale(self, gen: int, key: str, *, prefetch: bool) -> bool:
-        """Decide whether a queued slot is still worth running.
-
-        Rules:
-        - Generation mismatch → always stale (model reload, dir switch).
-        - For active *encode* slots: if the service has set a non-empty
-          priority key and it differs from ours, treat as stale.
-        - Prefetch slots are allowed to lag behind the active key — they
-          only get dropped on generation mismatch.
-        """
+        """Decide whether a queued slot is still worth running."""
         if self._priority_provider is None:
             return False
         try:
@@ -88,26 +75,20 @@ class SamInferenceWorker(QObject):
     # ------------------------------------------------------------------
 
     @pyqtSlot(str, str, str)
-    def do_load(self, ckpt: str, model_type: str, device_str: str):
+    def do_load(self, ckpt: str, model_type_hint: str, device_str: str):
         try:
-            device = torch.device(device_str)
-            sam = sam_model_registry[model_type](checkpoint=ckpt).to(device)
-            sam.eval()  # disable dropout/BN training mode for inference
-            self._predictor = SamPredictor(sam)
-            self._device = device
-            # FP16 autocast on CUDA cuts ViT-H forward time roughly in half
-            # with no measurable quality loss. CPU fp16 is usually slower
-            # than fp32 in stock PyTorch wheels, so we keep CPU at fp32.
-            # Set ``SAM_FP16=0`` to disable.
-            self._use_autocast = (
-                device.type == "cuda"
-                and os.environ.get("SAM_FP16", "1") != "0"
-            )
+            self._backend = create_backend(ckpt, model_type_hint=model_type_hint)
+            self._device = torch.device(device_str)
+            self._backend.load(ckpt, device_str)
             self._cache.clear()
             self._active_key = None
-            self.sig_model_ready.emit()
-        except Exception as exc:
+            self.sig_model_ready.emit(self._backend.model_type_label)
+        except SamBackendError as exc:
+            self._backend = None
             self.sig_load_failed.emit(str(exc))
+        except Exception as exc:
+            self._backend = None
+            self.sig_load_failed.emit(f"模型加载失败: {exc}")
 
     @pyqtSlot()
     def do_drop_cache(self):
@@ -120,16 +101,10 @@ class SamInferenceWorker(QObject):
 
     @pyqtSlot(int, str, object)
     def do_encode(self, gen: int, key: str, rgb: np.ndarray):
-        if self._predictor is None:
+        if self._backend is None:
             self.sig_encode_failed.emit("SAM model not loaded")
             return
-        # Drop stale encodes early — generation mismatch or the user has
-        # moved on to another image while this slot sat in the queue.
         if self._is_stale(gen, key, prefetch=False):
-            # Still emit done so the service can release its busy flag and
-            # the UI can clear "encoding…" status. The service compares
-            # ``gen`` against its current generation and will treat this as
-            # a stale callback automatically.
             self.sig_encode_done.emit(gen, key)
             return
         try:
@@ -141,18 +116,19 @@ class SamInferenceWorker(QObject):
             self._encode_to_cache(cache_key, np.asarray(rgb))
             self._restore(cache_key)
             self.sig_encode_done.emit(gen, cache_key)
+        except SamBackendError as exc:
+            self.sig_encode_failed.emit(str(exc))
         except Exception as exc:
             self.sig_encode_failed.emit(str(exc))
 
     @pyqtSlot(int, str, str)
     def do_prefetch(self, gen: int, key: str, path: str):
-        if self._predictor is None:
+        if self._backend is None:
             self.sig_prefetch_failed.emit("SAM model not loaded")
             return
         if not key:
             self.sig_prefetch_failed.emit("prefetch key is empty")
             return
-        # Stale prefetch (model reloaded etc.) — silently drop.
         if self._is_stale(gen, key, prefetch=True):
             return
         if key in self._cache:
@@ -166,13 +142,10 @@ class SamInferenceWorker(QObject):
                 return
             previous_active = self._active_key
             self._encode_to_cache(key, rgb)
-            # Restore the user-facing image so subsequent predicts hit it.
             if previous_active and previous_active in self._cache:
                 self._restore(previous_active)
             self.sig_prefetch_done.emit(gen, key)
         except RuntimeError as exc:
-            # On Jetson / certain drivers, NVML assertions can persist even
-            # after retry.  Prefetch is best-effort — don't crash the worker.
             self.sig_prefetch_failed.emit(str(exc))
         except Exception as exc:
             self.sig_prefetch_failed.emit(str(exc))
@@ -183,44 +156,31 @@ class SamInferenceWorker(QObject):
 
     @pyqtSlot(int, int, int, object)
     def do_predict(self, gen: int, x: int, y: int, crop_info):
-        if self._predictor is None:
+        if self._backend is None:
             self.sig_predict_failed.emit("SAM model not loaded")
             return
-        if self._active_key is None or not self._predictor.is_image_set:
+        if self._active_key is None or not self._backend.is_image_set:
             self.sig_predict_failed.emit("SAM image not encoded")
             return
         try:
             ox = int(crop_info.get("x", 0)) if isinstance(crop_info, dict) else 0
             oy = int(crop_info.get("y", 0)) if isinstance(crop_info, dict) else 0
 
-            with torch.inference_mode():
-                if self._use_autocast and self._device is not None:
-                    autocast_ctx = torch.autocast(
-                        device_type=self._device.type, dtype=torch.float16
-                    )
-                else:
-                    autocast_ctx = nullcontext()
-                with autocast_ctx:
-                    if isinstance(crop_info, dict) and "box" in crop_info:
-                        bx1, by1, bx2, by2 = crop_info["box"]
-                        box = np.array(
-                            [bx1 - ox, by1 - oy, bx2 - ox, by2 - oy], dtype=np.float32
-                        )
-                        masks, scores, _ = self._predictor.predict(
-                            box=box,
-                            multimask_output=True,
-                        )
-                    else:
-                        pts = np.array([[x - ox, y - oy]], dtype=np.float32)
-                        masks, scores, _ = self._predictor.predict(
-                            point_coords=pts,
-                            point_labels=np.array([1]),
-                            multimask_output=True,
-                        )
+            if isinstance(crop_info, dict) and "box" in crop_info:
+                bx1, by1, bx2, by2 = crop_info["box"]
+                masks, scores = self._backend.predict_box(
+                    bx1 - ox, by1 - oy, bx2 - ox, by2 - oy, multimask=True
+                )
+            else:
+                masks, scores = self._backend.predict_point(
+                    x - ox, y - oy, multimask=True
+                )
 
             best = self._best_mask(masks, scores)
             best = self._lift_to_full(best, crop_info)
             self.sig_predict_done.emit(best, gen)
+        except SamBackendError as exc:
+            self.sig_predict_failed.emit(str(exc))
         except Exception as exc:
             self.sig_predict_failed.emit(str(exc))
 
@@ -230,40 +190,21 @@ class SamInferenceWorker(QObject):
 
     def _encode_to_cache(self, key: str, rgb: np.ndarray):
         rgb = np.ascontiguousarray(np.asarray(rgb))
-        # Inference-only: skip autograd bookkeeping. ``set_image`` runs the
-        # ViT image encoder which is the dominant cost; without ``no_grad``
-        # PyTorch stashes intermediate activations for a backward pass that
-        # never happens.
         self._run_encoder(rgb)
-        self._cache[key] = self._snapshot()
+        self._cache[key] = self._backend.snapshot()
         self._cache.move_to_end(key)
         self._evict_to_capacity()
         self._active_key = key
 
     def _run_encoder(self, rgb: np.ndarray, *, _retried: bool = False):
-        """Run the ViT image encoder with retry on NVML assertion failures.
-
-        On Jetson / certain CUDA driver versions, concurrent NVML calls from
-        the CUDACachingAllocator can trigger an internal assertion
-        (``NVML_SUCCESS == r``).  A single retry after clearing the CUDA cache
-        and synchronizing typically resolves the transient failure.
-        """
+        """Run the image encoder with NVML retry (Jetson workaround)."""
         try:
-            # Proactively release cached CUDA memory to reduce the chance of
-            # the allocator needing to call NVML during the forward pass.
             if self._device is not None and self._device.type == "cuda":
                 torch.cuda.synchronize(self._device)
                 torch.cuda.empty_cache()
-
-            with torch.inference_mode():
-                if self._use_autocast and self._device is not None:
-                    with torch.autocast(device_type=self._device.type, dtype=torch.float16):
-                        self._predictor.set_image(rgb)
-                else:
-                    self._predictor.set_image(rgb)
+            self._backend.set_image(rgb)
         except RuntimeError as exc:
             if "NVML_SUCCESS" in str(exc) and not _retried:
-                # Transient NVML assertion — sync, clear cache, and retry once.
                 if self._device is not None and self._device.type == "cuda":
                     try:
                         torch.cuda.synchronize(self._device)
@@ -283,27 +224,14 @@ class SamInferenceWorker(QObject):
                     evicted = True
                     break
             if not evicted:
-                break  # only the active entry is left
-
-    def _snapshot(self) -> dict:
-        p = self._predictor
-        return {
-            "original_size": p.original_size,
-            "input_size": p.input_size,
-            "features": p.features,
-            "is_image_set": True,
-        }
+                break
 
     def _restore(self, key: str):
         if key not in self._cache:
             return
         snap = self._cache[key]
         self._cache.move_to_end(key)
-        p = self._predictor
-        p.original_size = snap["original_size"]
-        p.input_size = snap["input_size"]
-        p.features = snap["features"]
-        p.is_image_set = True
+        self._backend.restore(snap)
         self._active_key = key
 
     @staticmethod

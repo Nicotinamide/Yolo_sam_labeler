@@ -18,6 +18,7 @@ from .workers import SamInferenceWorker
 # Auto-download config
 # ---------------------------------------------------------------------------
 
+# SAM 1 (original)
 SAM_MODEL_URLS = {
     "vit_h": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
     "vit_l": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_l_0b3195.pth",
@@ -25,6 +26,22 @@ SAM_MODEL_URLS = {
 }
 SAM_MODEL_FILES = {k: os.path.basename(v) for k, v in SAM_MODEL_URLS.items()}
 SAM_FILE_SIZES = {"vit_h": 2564550879, "vit_l": 1251542702, "vit_b": 375042383}
+
+# SAM 2.1 (recommended over 2.0 — better in low light, low res)
+SAM2_MODEL_URLS = {
+    "sam2.1_hiera_tiny": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt",
+    "sam2.1_hiera_small": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt",
+    "sam2.1_hiera_base_plus": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt",
+    "sam2.1_hiera_large": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt",
+}
+SAM2_MODEL_FILES = {k: os.path.basename(v) for k, v in SAM2_MODEL_URLS.items()}
+# Approximate sizes (bytes)
+SAM2_FILE_SIZES = {
+    "sam2.1_hiera_tiny": 156_000_000,
+    "sam2.1_hiera_small": 184_000_000,
+    "sam2.1_hiera_base_plus": 323_000_000,
+    "sam2.1_hiera_large": 898_000_000,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +63,7 @@ class SamService(QObject):
         error(msg)                          — uniform error stream
     """
 
-    model_ready = pyqtSignal()
+    model_ready = pyqtSignal(str)            # backend label e.g. "SAM 1 vit_h"
     load_failed = pyqtSignal(str)
     encode_started = pyqtSignal(str)
     encode_done = pyqtSignal(int, str)
@@ -65,6 +82,7 @@ class SamService(QObject):
         self._encode_in_flight: Optional[str] = None
         self._loaded_config: tuple[str, str, str] | None = None
         self._pending_load_config: tuple[str, str, str] | None = None
+        self._backend_label: str = ""
 
         # Active image state
         self._active_key: Optional[str] = None
@@ -99,6 +117,11 @@ class SamService(QObject):
         return self._loaded_config
 
     @property
+    def backend_label(self) -> str:
+        """Human-readable label of the loaded backend (e.g. 'SAM 1 vit_h')."""
+        return self._backend_label
+
+    @property
     def active_key(self) -> Optional[str]:
         return self._active_key
 
@@ -111,12 +134,21 @@ class SamService(QObject):
 
     # ---- model lifecycle ----
 
-    def load(self, checkpoint: str, model_type: str, device_str: str | None = None) -> bool:
+    def load(self, checkpoint: str, model_type_hint: str = "",
+             device_str: str | None = None) -> bool:
+        """Load a SAM checkpoint. Backend (SAM 1/2/3) is auto-detected from filename.
+
+        Args:
+            checkpoint: path to .pth/.pt file
+            model_type_hint: optional override for SAM 1 (vit_h/vit_l/vit_b).
+                Ignored for SAM 2 (config inferred from filename).
+            device_str: 'cuda', 'cpu', or None for auto.
+        """
         if device_str is None or device_str == "auto":
             device_str = "cuda" if torch.cuda.is_available() else "cpu"
-        config = (os.path.abspath(checkpoint), model_type, device_str)
+        config = (os.path.abspath(checkpoint), model_type_hint, device_str)
         if self._ready and self._loaded_config == config:
-            self.model_ready.emit()
+            self.model_ready.emit(self._backend_label)
             return False
         self._ready = False
         self._loaded_config = None
@@ -127,7 +159,7 @@ class SamService(QObject):
         self._pending_prompt = None
         self._ensure_thread()
         self._pending_load_config = config
-        self._worker.cmd_load.emit(checkpoint, model_type, device_str)
+        self._worker.cmd_load.emit(checkpoint, model_type_hint, device_str)
         return True
 
     def shutdown(self):
@@ -262,11 +294,12 @@ class SamService(QObject):
 
         self._thread.start()
 
-    def _on_model_ready(self):
+    def _on_model_ready(self, label: str):
         self._ready = True
         self._is_busy = False
         self._loaded_config = self._pending_load_config
-        self.model_ready.emit()
+        self._backend_label = label
+        self.model_ready.emit(label)
 
     def _on_load_failed(self, msg: str):
         self._ready = False
@@ -348,13 +381,16 @@ class SamService(QObject):
 
 
 def download_sam_checkpoint(parent, model_type: str, save_path: str) -> bool:
-    """Download SAM checkpoint with progress dialog. Returns True on success."""
-    url = SAM_MODEL_URLS.get(model_type)
+    """Download SAM checkpoint with progress dialog. Returns True on success.
+
+    Resolves URL from both SAM 1 (vit_h/l/b) and SAM 2 (sam2.1_*) registries.
+    """
+    url = SAM_MODEL_URLS.get(model_type) or SAM2_MODEL_URLS.get(model_type)
     if not url:
         QMessageBox.critical(parent, "下载失败", f"不支持的模型类型: {model_type}")
         return False
 
-    expected = SAM_FILE_SIZES.get(model_type, 0)
+    expected = SAM_FILE_SIZES.get(model_type) or SAM2_FILE_SIZES.get(model_type, 0)
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
 
     dlg = QDialog(parent)

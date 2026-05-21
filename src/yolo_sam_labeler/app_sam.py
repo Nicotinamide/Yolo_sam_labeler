@@ -45,15 +45,14 @@ class SamControllerMixin:
 
     def _load_sam(self):
         ckpt = self.sam_checkpoint
-        mt = self.model_type
         if not ckpt:
-            ckpt = self._fallback_sam_checkpoint(mt)
+            ckpt = self._fallback_sam_checkpoint(self.model_type)
             self.sam_checkpoint = ckpt
         if not ckpt:
             QMessageBox.warning(self, "无法加载", "请先通过「模型 → SAM 权重管理」选择权重。")
             return
         if not os.path.isfile(ckpt):
-            default_name = SAM_MODEL_FILES.get(mt)
+            default_name = SAM_MODEL_FILES.get(self.model_type)
             if os.path.basename(ckpt) != default_name:
                 QMessageBox.warning(self, "无法加载", f"未找到权重文件:\n{ckpt}")
                 return
@@ -62,17 +61,17 @@ class SamControllerMixin:
                 f"未找到 SAM 权重:\n{ckpt}\n\n是否自动从 Meta 官方下载？",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
             )
-            if reply != QMessageBox.Yes or not download_sam_checkpoint(self, mt, ckpt):
+            if reply != QMessageBox.Yes or not download_sam_checkpoint(self, self.model_type, ckpt):
                 return
-        config = (os.path.abspath(ckpt), mt, str(self.device))
+        config = (os.path.abspath(ckpt), self.model_type, str(self.device))
         if self.sam.is_ready and self.sam.loaded_config == config:
             self._log("SAM 已加载，直接使用当前图像。", "info")
             if not self.sam.is_encoded:
                 self._encode_debounce.stop()
                 self._encode_current_image("当前图像")
             return
-        self._log(f"正在后台加载 SAM ({mt}, {self.device})…", "info")
-        self.sam.load(ckpt, mt, str(self.device))
+        self._log(f"正在后台加载 SAM 权重 ({os.path.basename(ckpt)}, {self.device})…", "info")
+        self.sam.load(ckpt, self.model_type, str(self.device))
         self._remember_paths()
 
     def _auto_load_sam(self):
@@ -92,21 +91,12 @@ class SamControllerMixin:
         self.model_type = model_type
         self._load_sam()
 
-    def _on_sam_ready(self):
+    def _on_sam_ready(self, label: str = ""):
         device_str = "CUDA" if torch.cuda.is_available() else "CPU"
-        budget = {
-            ("CUDA", "vit_h"): "≈0.3s",
-            ("CUDA", "vit_l"): "≈0.2s",
-            ("CUDA", "vit_b"): "≈0.1s",
-            ("CPU", "vit_h"): "≈8–15s",
-            ("CPU", "vit_l"): "≈4–8s",
-            ("CPU", "vit_b"): "≈1–2s",
-        }.get((device_str, self.model_type), "")
-        suffix = f"，单图编码 {budget}" if budget else ""
-        self._log(f"SAM 模型已加载 ({self.model_type} on {device_str}){suffix}", "ok")
-        self.sidebar.set_sam_status(f"{self.model_type} 已加载 ✓")
-        if device_str == "CPU" and self.model_type == "vit_h":
-            self._log("提示：CPU 跑 vit_h 较慢，可在侧栏切换到 vit_b 提速。", "info")
+        if not label:
+            label = self.sam.backend_label or self.model_type
+        self._log(f"模型已加载: {label} on {device_str}", "ok")
+        self.sidebar.set_sam_status(f"{label} 已加载 ✓")
         self._encode_debounce.stop()
         self._encode_current_image("当前图像")
         self._schedule_prefetch()

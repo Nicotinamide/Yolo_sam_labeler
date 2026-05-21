@@ -135,15 +135,38 @@ yolo-sam-label \
 
 ## SAM 权重
 
-首次使用时程序会提示自动从 Meta 官方下载 SAM 权重（~2.4 GB for vit_h）。也可以提前手动下载放到项目目录：
+首次使用时程序会提示自动从 Meta 官方下载 SAM 权重。也可以通过菜单「模型 → SAM 权重管理」浏览所有版本并下载选择。
 
-| 模型 | 文件名 | 大小 | 速度 (GPU) |
-|------|--------|------|-----------|
-| vit_h | sam_vit_h_4b8939.pth | 2.4 GB | 最精确，编码 ~0.3s |
-| vit_l | sam_vit_l_0b3195.pth | 1.2 GB | 平衡，编码 ~0.2s |
-| vit_b | sam_vit_b_01ec64.pth | 375 MB | 最快，编码 ~0.1s |
+### SAM 1 (默认，包名 `segment-anything`)
 
-Jetson / CPU 用户建议用 `vit_b`，速度快很多。
+| 模型 | 文件名 | 大小 | 说明 |
+|------|--------|------|------|
+| ViT-H | sam_vit_h_4b8939.pth | 2.4 GB | 最高精度 |
+| ViT-L | sam_vit_l_0b3195.pth | 1.2 GB | 平衡 |
+| ViT-B | sam_vit_b_01ec64.pth | 375 MB | 最快 |
+
+### SAM 2.1 (推荐新项目，包名 `sam-2`)
+
+| 模型 | 文件名 | 大小 | 说明 |
+|------|--------|------|------|
+| Hiera Large | sam2.1_hiera_large.pt | 898 MB | 比 SAM 1 ViT-H 精度更好且更小 |
+| Hiera Base+ | sam2.1_hiera_base_plus.pt | 323 MB | 中型 |
+| Hiera Small | sam2.1_hiera_small.pt | 184 MB | 小型 |
+| Hiera Tiny | sam2.1_hiera_tiny.pt | 156 MB | 最快 |
+
+**SAM 2 vs SAM 1**: 相同精度下 SAM 2 推理快约 6×、文件小得多。但需要额外安装 `sam-2` 包：
+
+```bash
+# 已装 SAM 1 的环境，再加 SAM 2 支持：
+uv pip install git+https://github.com/facebookresearch/sam2.git
+
+# 或者从一开始就装两个：
+uv sync --extra all2  # 等同于 [sam, sam2, yolo]
+```
+
+> Jetson 用户：SAM 2 的 CUDA 扩展可能编译失败（没影响功能，会回退到 PyTorch 实现，速度略慢）。
+
+权重默认下载到 `~/.sam_weights/`。
 
 ## 功能特性
 

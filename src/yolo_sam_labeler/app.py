@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
 
 from .models import AnnotationStore, ClassRegistry, DEFAULT_CLASS_NAMES
 from .io_utils import (
-    scan_images, load_image_bgr,
+    scan_images, discover_image_dir, load_image_bgr,
     save_labels, load_labels_for_image,
     load_class_names, save_class_names,
 )
@@ -162,6 +162,9 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         act_label_dir = QAction("选择标签目录…", self)
         act_label_dir.triggered.connect(self._pick_label_dir)
         file_menu.addAction(act_label_dir)
+        act_class_file = QAction("载入类别文件…", self)
+        act_class_file.triggered.connect(self._pick_class_file)
+        file_menu.addAction(act_class_file)
         file_menu.addSeparator()
         act_save = QAction("保存当前图", self)
         act_save.setShortcuts([QKeySequence("S"), QKeySequence.Save])
@@ -210,15 +213,12 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         tool_menu.addAction(act_convert)
 
         model_menu = mb.addMenu("模型")
-        act_sam_ckpt = QAction("选择 SAM 权重…", self)
+        act_sam_ckpt = QAction("选择并加载 SAM 权重…", self)
         act_sam_ckpt.triggered.connect(self._pick_sam_ckpt)
         model_menu.addAction(act_sam_ckpt)
         act_weight_mgr = QAction("SAM 权重管理…", self)
         act_weight_mgr.triggered.connect(self._open_weight_manager)
         model_menu.addAction(act_weight_mgr)
-        act_load_sam = QAction("加载 SAM", self)
-        act_load_sam.triggered.connect(self._load_sam)
-        model_menu.addAction(act_load_sam)
         model_menu.addSeparator()
         act_yolo_w = QAction("选择 YOLO 权重…", self)
         act_yolo_w.triggered.connect(self._pick_yolo_weights)
@@ -340,14 +340,23 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         return default if value is None else str(value)
 
     def _class_file_candidates(self, image_dir: str = "", label_dir: str = "") -> list[str]:
+        """Return candidate paths for classes.txt.
+
+        Search locations (in priority order):
+        1. image_dir/classes.txt   (most common: classes.txt next to images)
+        2. label_dir/classes.txt   (some YOLO tools put it in labels/)
+        """
         candidates: list[str] = []
         image_dir = image_dir or getattr(self, "image_dir", "")
         if not label_dir and hasattr(self, "store"):
             label_dir = self.store.label_dir
+
         if image_dir:
             candidates.append(os.path.join(image_dir, "classes.txt"))
         if label_dir:
             candidates.append(os.path.join(label_dir, "classes.txt"))
+
+        # Deduplicate by resolved path
         deduped: list[str] = []
         seen: set[str] = set()
         for path in candidates:
@@ -392,13 +401,9 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
                 self.classes.set_names(classes)
                 self._log(f"已载入类别: {path}", "ok")
                 return
-        # No classes.txt found — keep current classes if we have any.
-        # Only fall back to default when truly empty (first launch, no history).
-        if len(self.classes) == 0:
-            self.classes.set_names(dict(DEFAULT_CLASS_NAMES))
-            self._log("未找到 classes.txt，请在右侧面板添加类别。", "warn")
-        else:
-            self._log("未找到 classes.txt，保留当前类别。", "info")
+        # No classes.txt found — reset to default
+        self.classes.set_names(dict(DEFAULT_CLASS_NAMES))
+        self._log("未找到 classes.txt，请在右侧面板添加类别。", "warn")
 
     def _persist_classes(self):
         data = self.classes.to_names()
@@ -449,6 +454,77 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         return os.path.join(image_dir, "labels") if image_dir else ""
 
     @staticmethod
+    def _discover_label_dir(root_dir: str, image_dir: str = "") -> str:
+        """Find the label directory by matching .txt filenames against image stems.
+
+        Args:
+            root_dir: the directory the user selected (to scan subdirs)
+            image_dir: where images actually are (may be a subdir of root_dir)
+
+        Strategy:
+        1. Check root_dir/labels/ (standard YOLO layout)
+        2. Check image_dir/labels/ (if image_dir != root_dir)
+        3. Scan subdirs of root_dir — pick the one with most .txt stem matches
+        4. Fall back to root_dir/labels/
+        """
+        if not root_dir or not os.path.isdir(root_dir):
+            return os.path.join(root_dir, "labels") if root_dir else ""
+
+        image_dir = image_dir or root_dir
+
+        # Collect image stems for matching
+        image_stems: set[str] = set()
+        if os.path.isdir(image_dir):
+            for name in os.listdir(image_dir):
+                ext = os.path.splitext(name)[1].lower()
+                if ext in {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}:
+                    image_stems.add(os.path.splitext(name)[0])
+
+        if not image_stems:
+            return os.path.join(root_dir, "labels")
+
+        # 1. Check standard "labels/" under root
+        labels_dir = os.path.join(root_dir, "labels")
+        if os.path.isdir(labels_dir):
+            return labels_dir
+
+        # 2. Check "labels/" under image_dir (if different from root)
+        if image_dir != root_dir:
+            img_labels = os.path.join(image_dir, "labels")
+            if os.path.isdir(img_labels):
+                return img_labels
+
+        # 3. Scan subdirectories of root for matching .txt files
+        best_dir = ""
+        best_matches = 0
+        try:
+            for entry in os.scandir(root_dir):
+                if not entry.is_dir() or entry.name.startswith("."):
+                    continue
+                # Skip the image directory itself
+                if os.path.abspath(entry.path) == os.path.abspath(image_dir):
+                    continue
+                txt_stems: set[str] = set()
+                try:
+                    for f in os.scandir(entry.path):
+                        if f.is_file() and f.name.endswith(".txt") and f.name != "classes.txt":
+                            txt_stems.add(os.path.splitext(f.name)[0])
+                except PermissionError:
+                    continue
+                matches = len(txt_stems & image_stems)
+                if matches > best_matches:
+                    best_matches = matches
+                    best_dir = entry.path
+        except PermissionError:
+            pass
+
+        if best_dir and best_matches > 0:
+            return best_dir
+
+        # 4. Default
+        return labels_dir
+
+    @staticmethod
     def _fallback_sam_checkpoint(model_type: str) -> str:
         filename = SAM_MODEL_FILES.get(model_type, "sam_vit_h_4b8939.pth")
         candidates = [
@@ -468,6 +544,10 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
     def _load_directory(self, path: str):
         old_image_dir = self.image_dir
         old_auto_label_dir = self._auto_label_dir_for(old_image_dir)
+        # Clear old annotations immediately so they never bleed into the new directory
+        self.store.masks.clear()
+        self.store.boxes.clear()
+        self.store.last_kind = ""
         self.image_dir = path
         switching_dirs = bool(old_image_dir) and not self._same_path(old_image_dir, path)
         label_was_tied_to_old_dir = switching_dirs and self._is_subpath(self.store.label_dir, old_image_dir)
@@ -476,9 +556,20 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
             or self._same_path(self.store.label_dir, old_auto_label_dir)
             or label_was_tied_to_old_dir
         ):
-            self.store.label_dir = self._auto_label_dir_for(path)
+            # Will be set properly after we discover the actual image dir
+            self.store.label_dir = ""
         self._load_classes_for_current_dirs()
-        self.image_paths = scan_images(path)
+        # Discover actual image location (might be a subdirectory)
+        actual_image_dir = discover_image_dir(path)
+        if actual_image_dir != path:
+            self._log(f"图片目录: {actual_image_dir}", "info")
+        self.image_paths = scan_images(actual_image_dir)
+        # Discover label directory (match txt stems against image stems)
+        if not self.store.label_dir:
+            discovered = self._discover_label_dir(path, actual_image_dir)
+            self.store.label_dir = discovered
+            if os.path.isdir(discovered):
+                self._log(f"标签目录: {discovered}", "info")
         self.index = 0
         # Reset ROI — old ROI mask dimensions won't match new images
         self.roi_mode = "full"
@@ -494,6 +585,13 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
             self._prefetch_debounce.stop()
             self.sam.invalidate_image()
             self._log(f"当前目录未找到图像: {path}", "warn")
+        # Final refresh — ensure right panel always reflects current state
+        self._refresh_class_list()
+        ids = self.classes.sorted_ids()
+        if ids:
+            if self.current_class_id not in self.classes:
+                self.current_class_id = ids[0]
+            self.rpanel.select_class(self.current_class_id)
         self._update_header()
 
     def _load_current_image(self):
@@ -821,6 +919,7 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
             self.sidebar.set_checkpoint_label(path)
             self._remember_paths()
             self._log(f"SAM 权重: {path}", "ok")
+            self._load_sam()  # Auto-load after selection
 
     def _open_weight_manager(self):
         """Open the SAM weight manager to download and select checkpoints."""
@@ -846,6 +945,28 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
             self.sidebar.set_yolo_weights_label(path)
             self._remember_paths()
             self._log(f"YOLO 权重: {path}", "ok")
+
+    def _pick_class_file(self):
+        """Let user manually select a class names file (any .txt)."""
+        start_dir = self.image_dir or "."
+        path, _ = QFileDialog.getOpenFileName(
+            self, "载入类别文件", start_dir,
+            "文本文件 (*.txt *.names);;All (*.*)"
+        )
+        if not path:
+            return
+        classes = load_class_names(path)
+        if not classes:
+            self._log(f"类别文件为空或格式不正确: {path}", "warn")
+            return
+        self.classes.set_names(classes)
+        self._refresh_class_list()
+        ids = self.classes.sorted_ids()
+        if ids:
+            self.current_class_id = ids[0]
+            self.rpanel.select_class(self.current_class_id)
+        self._persist_classes()
+        self._log(f"已载入类别文件: {path} ({len(classes)} 个类别)", "ok")
 
     # ==================================================================
     # Window management

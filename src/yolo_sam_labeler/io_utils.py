@@ -89,7 +89,10 @@ def save_class_names(path: str | Path, class_names: dict[int, str]):
 
 
 def scan_images(directory: str) -> list[str]:
-    """Return sorted list of absolute image paths in a directory."""
+    """Return sorted list of absolute image paths in a directory.
+
+    Only scans the directory itself, not subdirectories.
+    """
     if not directory or not os.path.isdir(directory):
         return []
     paths: list[str] = []
@@ -97,6 +100,49 @@ def scan_images(directory: str) -> list[str]:
         if os.path.splitext(name)[1].lower() in IMAGE_EXTS:
             paths.append(os.path.abspath(os.path.join(directory, name)))
     return paths
+
+
+def discover_image_dir(root: str) -> str:
+    """Given a root directory, find where the images actually are.
+
+    Logic:
+    1. If root itself contains images → return root
+    2. If root has a subdirectory containing images (prefer 'images', 'imgs',
+       'train', or whichever subdir has the most image files) → return that subdir
+    3. Fall back to root
+    """
+    if not root or not os.path.isdir(root):
+        return root or ""
+
+    # Check root first
+    for name in os.listdir(root):
+        if os.path.splitext(name)[1].lower() in IMAGE_EXTS:
+            return root  # root has images directly
+
+    # Scan immediate subdirs
+    best_dir = ""
+    best_count = 0
+    preferred_names = {"images", "imgs", "train", "img", "pics"}
+    try:
+        for entry in os.scandir(root):
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+            count = sum(
+                1 for f in os.scandir(entry.path)
+                if f.is_file() and os.path.splitext(f.name)[1].lower() in IMAGE_EXTS
+            )
+            if count == 0:
+                continue
+            # Prefer well-known names
+            if entry.name.lower() in preferred_names:
+                return entry.path
+            if count > best_count:
+                best_count = count
+                best_dir = entry.path
+    except PermissionError:
+        pass
+
+    return best_dir if best_dir else root
 
 
 def load_image_bgr(path: str) -> Optional[np.ndarray]:

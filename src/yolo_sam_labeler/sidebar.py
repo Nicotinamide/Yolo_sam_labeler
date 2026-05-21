@@ -87,7 +87,7 @@ class Sidebar(QWidget):
             "默认关闭：相邻图片会自动后台预编码并缓存，切回旧图近乎即时。"
         )
         sam_lay.addRow(self.chk_lazy)
-        self.btn_load = _make_compact_btn("加载 SAM", "加载选中的 SAM 模型权重")
+        self.btn_load = _make_compact_btn("加载 SAM 权重", "加载选中的 SAM 模型权重")
         self.btn_load.clicked.connect(self._emit_load)
         sam_lay.addRow(self.btn_load)
         layout.addWidget(sam_grp)

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yolo-sam-labeler"
-version = "0.2.0"
-description = "PyQt5 annotation tool combining SAM segmentation and YOLO detection labeling."
+version = "0.3.0"
+description = "PyQt5 annotation tool combining SAM 1/2 segmentation and YOLO detection labeling."
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
 dependencies = [

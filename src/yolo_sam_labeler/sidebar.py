@@ -5,7 +5,7 @@ import os
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QGroupBox, QFormLayout,
-    QComboBox, QLabel, QCheckBox, QDoubleSpinBox,
+    QLabel, QCheckBox, QDoubleSpinBox,
     QRadioButton, QButtonGroup, QPushButton, QScrollArea,
     QHBoxLayout, QSizePolicy,
 )
@@ -28,7 +28,7 @@ class Sidebar(QWidget):
     """Left dock with SAM / YOLO / ROI grouped controls.
 
     Signals:
-        load_sam_requested(ckpt, model_type)
+        weight_manager_requested()      — open SAM weight manager dialog
         yolo_predict_requested(conf, replace)
         roi_draw_requested()
         roi_close_requested()
@@ -36,7 +36,6 @@ class Sidebar(QWidget):
         roi_full_requested()
     """
 
-    load_sam_requested = pyqtSignal(str, str)       # ckpt, model_type
     yolo_predict_requested = pyqtSignal(float, bool)  # conf, replace
     weight_manager_requested = pyqtSignal()
     roi_draw_requested = pyqtSignal()

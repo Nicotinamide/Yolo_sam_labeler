@@ -2,6 +2,8 @@
 
 PyQt5 标注工具，SAM 点击分割 + 拖拽画框一体化界面，输出 YOLO 分割 + 检测双格式用于训练。
 
+> **环境要求**：Python **3.10 / 3.11**（不要用 3.12+，PyTorch + PyQt5 + Jetson 兼容性问题）
+
 ## 快速安装
 
 ### 方式一：一键脚本（推荐）
@@ -225,9 +227,15 @@ yolo_sam_labeler/
 │   ├── sam_service.py          # SAM 异步加载/编码/预测
 │   ├── yolo_service.py         # YOLO 异步推理
 │   ├── workers.py              # SAM QThread worker + embedding 缓存
+│   ├── weight_manager.py       # SAM 权重管理对话框
 │   ├── io_utils.py             # YOLO 格式读写
-│   └── colors.py               # 类别颜色
-├── tests/                      # 126 个单元测试
+│   ├── colors.py               # 类别颜色
+│   └── backends/               # SAM 1/2 后端抽象
+│       ├── base.py             # SamBackend 抽象基类
+│       ├── factory.py          # 文件名 → 后端选择
+│       ├── sam1.py             # SAM 1 (segment-anything) 后端
+│       └── sam2.py             # SAM 2 (sam-2) 后端
+├── tests/                      # 134 个单元测试
 └── docs/TEST_PLAN.md           # 功能逻辑文档 + 测试计划
 ```
 

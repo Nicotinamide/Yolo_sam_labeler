@@ -85,12 +85,6 @@ class SamControllerMixin:
         elif self.sam_checkpoint:
             self._log("SAM 权重不存在，请通过「模型 → SAM 权重管理」下载。", "warn")
 
-    def _on_load_sam(self, ckpt: str, model_type: str):
-        if ckpt:
-            self.sam_checkpoint = ckpt
-        self.model_type = model_type
-        self._load_sam()
-
     def _on_sam_ready(self, label: str = ""):
         device_str = "CUDA" if torch.cuda.is_available() else "CPU"
         if not label:

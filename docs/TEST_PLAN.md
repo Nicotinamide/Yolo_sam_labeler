@@ -293,3 +293,75 @@
 # 只跑纯逻辑 (不需要 display)
 /home/liyike/yolo_seg_label_sam/.venv/bin/python -m pytest tests/ -v -k "not gui and not widget"
 ```
+
+
+---
+
+## 四、新增模块（v0.3.0）
+
+### 10. backends/ — SAM 后端抽象层
+
+#### SamBackend (base.py)
+- 抽象基类，统一 SAM 1/2/3 的接口
+- 核心方法:
+  - `load(checkpoint, device)` — 加载权重
+  - `set_image(rgb)` — 编码图像
+  - `snapshot() / restore()` — 缓存 embedding
+  - `predict_point(x, y, multimask)` — 点击预测
+  - `predict_box(x1, y1, x2, y2, multimask)` — 框预测
+- 属性:
+  - `name` — 后端短名 (sam1/sam2)
+  - `model_type_label` — 用户可见标签
+  - `is_image_set` — 是否已编码
+  - `supports_box` — 是否支持框 prompt
+  - `supports_autocast(device)` — 是否启用 FP16
+
+#### Sam1Backend (sam1.py)
+- 包装 `segment_anything.SamPredictor`
+- 文件名映射: sam_vit_h_4b8939 → vit_h, etc.
+- `guess_sam1_model_type(path)` 推断 vit_h/l/b
+- snapshot 字段: original_size, input_size, features, is_image_set
+
+#### Sam2Backend (sam2.py)
+- 包装 `sam2.SAM2ImagePredictor`
+- 文件名映射: sam2.1_hiera_large → configs/sam2.1/sam2.1_hiera_l.yaml
+- 支持 SAM 2.0 和 2.1 (推荐 2.1)
+- snapshot 字段: _features, _orig_hw, _is_image_set, _is_batch
+
+#### factory.py — 后端工厂
+- `detect_backend_kind(path)` → "sam1" / "sam2" / "sam3"
+  - 基于文件名前缀判断
+  - sam2*/sam_2* → SAM 2
+  - sam3* → SAM 3 (raise error，未支持)
+  - 默认 → SAM 1
+- `create_backend(path, model_type_hint)` → 实例化对应后端
+
+### 11. weight_manager.py — 权重管理对话框
+
+#### WeightManagerDialog
+- 列出 7 个模型 (3 SAM 1 + 4 SAM 2.1)
+- 每行: 名称 | 描述 | 大小 | 状态 | 下载按钮
+- 状态判断: 文件存在 + 大小 ≥ 95% expected
+- 下载: 非阻塞（QTimer 切片读 chunks）+ 进度条
+- 默认目录: `~/.sam_weights/`
+- 用户操作: 选行 → "使用选中的权重" → 关闭对话框 → app 加载
+
+#### download_sam_checkpoint (sam_service.py)
+- 兼容 SAM 1 和 SAM 2 URL
+- URL 字典: SAM_MODEL_URLS + SAM2_MODEL_URLS
+- 进度回调: QApplication.processEvents() 让 UI 响应
+- 异常处理: 中断时清理 .part 文件
+
+---
+
+## 五、测试运行
+
+```bash
+# 全量测试 (134 个)
+QT_QPA_PLATFORM=offscreen python -m pytest tests/ -v
+
+# 仅纯逻辑 (无 Qt)
+python -m pytest tests/test_models.py tests/test_models_extended.py \
+                  tests/test_io_utils.py tests/test_io_utils_extended.py \
+                  tests/test_yolo_service.py tests/test_backends.py tests/test_colors.py
+```

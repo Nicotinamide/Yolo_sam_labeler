@@ -177,13 +177,6 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         act_label_dir = QAction("选择标签目录…", self)
         act_label_dir.triggered.connect(self._pick_label_dir)
         file_menu.addAction(act_label_dir)
-        adv_label_menu = file_menu.addMenu("高级")
-        act_seg_dir = QAction("单独指定分割目录…", self)
-        act_seg_dir.triggered.connect(self._pick_seg_dir)
-        adv_label_menu.addAction(act_seg_dir)
-        act_detect_dir = QAction("单独指定检测目录…", self)
-        act_detect_dir.triggered.connect(self._pick_detect_dir)
-        adv_label_menu.addAction(act_detect_dir)
         act_class_file = QAction("载入类别文件…", self)
         act_class_file.triggered.connect(self._pick_class_file)
         file_menu.addAction(act_class_file)
@@ -248,6 +241,14 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         act_yolo_w = QAction("选择 YOLO 权重…", self)
         act_yolo_w.triggered.connect(self._pick_yolo_weights)
         model_menu.addAction(act_yolo_w)
+
+        adv_menu = mb.addMenu("高级")
+        act_seg_dir = QAction("单独指定分割目录…", self)
+        act_seg_dir.triggered.connect(self._pick_seg_dir)
+        adv_menu.addAction(act_seg_dir)
+        act_detect_dir = QAction("单独指定检测目录…", self)
+        act_detect_dir.triggered.connect(self._pick_detect_dir)
+        adv_menu.addAction(act_detect_dir)
 
         # --- info bar ---
         info = QFrame()

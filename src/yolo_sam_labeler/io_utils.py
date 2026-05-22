@@ -805,3 +805,135 @@ def split_mixed_label_dir(
             stats["skipped_unknown"] += 1
 
     return stats
+
+
+
+# ---------------------------------------------------------------------------
+# Lazy reconciliation (per-image format check)
+# ---------------------------------------------------------------------------
+
+
+def reconcile_label_file_for_image(store: "AnnotationStore", stem: str) -> dict:
+    """Move ``{stem}.txt`` between seg_dir and detect_dir based on actual content.
+
+    The directory-level format is decided by majority on open, but individual
+    files that disagree with the directory's role are moved to the correct
+    sibling directory the moment we visit that image. This is the "lazy
+    reconcile" pattern: no upfront scan, just-in-time relocation.
+
+    Behaviour:
+
+    - When ``seg_dir == detect_dir`` (shared layout) reconciliation is a
+      no-op; the loader's per-file sniffing routes content correctly.
+    - The candidate target directory is created on demand.
+    - If the target path already holds a file, we leave both source and
+      destination untouched (counted in ``conflicts``) — never destroy data.
+
+    Returns a dict with counts: ``moved_to_seg`` / ``moved_to_detect`` /
+    ``conflicts`` / ``skipped`` / ``actions`` (list of human-readable strings).
+    """
+    import shutil
+
+    actions: list[str] = []
+    result = {
+        "moved_to_seg": 0,
+        "moved_to_detect": 0,
+        "conflicts": 0,
+        "skipped": 0,
+        "actions": actions,
+    }
+
+    seg_dir = getattr(store, "seg_dir", "") or ""
+    detect_dir = getattr(store, "detect_dir", "") or ""
+    if not seg_dir or not detect_dir:
+        return result
+    if os.path.abspath(seg_dir) == os.path.abspath(detect_dir):
+        return result  # shared layout — nothing to reconcile
+
+    seg_path = os.path.join(seg_dir, f"{stem}.txt")
+    detect_path = os.path.join(detect_dir, f"{stem}.txt")
+
+    # Case 1: file in seg_dir but content is detect → move to detect_dir.
+    if os.path.isfile(seg_path):
+        kind = _classify_first_data_line(seg_path)
+        if kind == "detect":
+            if os.path.exists(detect_path):
+                result["conflicts"] += 1
+                actions.append(
+                    f"冲突: {stem}.txt 在分割目录里是检测格式，但检测目录已有同名文件，未移动。"
+                )
+            else:
+                try:
+                    os.makedirs(detect_dir, exist_ok=True)
+                    shutil.move(seg_path, detect_path)
+                    result["moved_to_detect"] += 1
+                    actions.append(
+                        f"已搬移: {stem}.txt → 检测目录 (内容为检测格式)"
+                    )
+                except OSError as exc:
+                    result["skipped"] += 1
+                    actions.append(f"搬移失败: {stem}.txt: {exc}")
+
+    # Case 2: file in detect_dir but content is seg → move to seg_dir.
+    if os.path.isfile(detect_path):
+        kind = _classify_first_data_line(detect_path)
+        if kind == "seg":
+            new_seg_path = os.path.join(seg_dir, f"{stem}.txt")
+            if os.path.exists(new_seg_path):
+                result["conflicts"] += 1
+                actions.append(
+                    f"冲突: {stem}.txt 在检测目录里是分割格式，但分割目录已有同名文件，未移动。"
+                )
+            else:
+                try:
+                    os.makedirs(seg_dir, exist_ok=True)
+                    shutil.move(detect_path, new_seg_path)
+                    result["moved_to_seg"] += 1
+                    actions.append(
+                        f"已搬移: {stem}.txt → 分割目录 (内容为分割格式)"
+                    )
+                except OSError as exc:
+                    result["skipped"] += 1
+                    actions.append(f"搬移失败: {stem}.txt: {exc}")
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Empty-file cleanup
+# ---------------------------------------------------------------------------
+
+
+def cleanup_empty_label_files(*dirs: str) -> dict:
+    """Remove zero-byte ``.txt`` files from each given directory.
+
+    Skips ``classes.txt`` and any non-``.txt`` files. Returns a dict with the
+    total ``removed`` count and a list of ``paths`` that were deleted, so the
+    UI can surface a single concise log line.
+    """
+    removed = 0
+    paths: list[str] = []
+    seen: set[str] = set()
+    for d in dirs:
+        if not d:
+            continue
+        d_abs = os.path.abspath(d)
+        if d_abs in seen or not os.path.isdir(d_abs):
+            continue
+        seen.add(d_abs)
+        try:
+            entries = os.listdir(d_abs)
+        except OSError:
+            continue
+        for name in entries:
+            if not name.endswith(".txt") or name == "classes.txt":
+                continue
+            p = os.path.join(d_abs, name)
+            try:
+                if os.path.isfile(p) and os.path.getsize(p) == 0:
+                    os.remove(p)
+                    removed += 1
+                    paths.append(p)
+            except OSError:
+                continue
+    return {"removed": removed, "paths": paths}

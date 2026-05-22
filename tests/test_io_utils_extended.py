@@ -922,3 +922,139 @@ class TestShareTargetHelper:
         store.seg_dir = str(tmp_path / "x")
         # detect_dir = ""
         assert _seg_detect_share_target(store) is False
+
+
+
+# ===========================================================================
+# Lazy reconcile + empty cleanup
+# ===========================================================================
+
+
+from yolo_sam_labeler.io_utils import (  # noqa: E402
+    reconcile_label_file_for_image,
+    cleanup_empty_label_files,
+)
+
+
+class TestReconcileLabelFile:
+    def _make_store(self, seg, det):
+        cr = ClassRegistry({0: "a"})
+        store = AnnotationStore(cr, "")
+        store.seg_dir = str(seg) if seg else ""
+        store.detect_dir = str(det) if det else ""
+        return store
+
+    def test_detect_in_seg_dir_moves_to_detect(self, tmp_path):
+        seg = tmp_path / "txt"
+        det = tmp_path / "txt_detect"
+        seg.mkdir()
+        # detect-format file in seg_dir.
+        (seg / "img.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        store = self._make_store(seg, det)
+        result = reconcile_label_file_for_image(store, "img")
+        assert result["moved_to_detect"] == 1
+        assert not (seg / "img.txt").exists()
+        assert (det / "img.txt").exists()
+
+    def test_seg_in_detect_dir_moves_to_seg(self, tmp_path):
+        seg = tmp_path / "txt"
+        det = tmp_path / "txt_detect"
+        det.mkdir()
+        (det / "img.txt").write_text(
+            "0 0.10 0.10 0.50 0.10 0.50 0.50 0.10 0.50\n", encoding="utf-8"
+        )
+        store = self._make_store(seg, det)
+        result = reconcile_label_file_for_image(store, "img")
+        assert result["moved_to_seg"] == 1
+        assert (seg / "img.txt").exists()
+        assert not (det / "img.txt").exists()
+
+    def test_matching_format_no_move(self, tmp_path):
+        seg = tmp_path / "txt"
+        det = tmp_path / "txt_detect"
+        seg.mkdir()
+        (seg / "img.txt").write_text(
+            "0 0.10 0.10 0.50 0.10 0.50 0.50 0.10 0.50\n", encoding="utf-8"
+        )
+        store = self._make_store(seg, det)
+        result = reconcile_label_file_for_image(store, "img")
+        assert result["moved_to_seg"] == 0
+        assert result["moved_to_detect"] == 0
+        assert (seg / "img.txt").exists()
+
+    def test_conflict_keeps_source(self, tmp_path):
+        seg = tmp_path / "txt"
+        det = tmp_path / "txt_detect"
+        seg.mkdir()
+        det.mkdir()
+        # detect file in seg_dir
+        (seg / "img.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        # also a pre-existing file in detect_dir at the same stem
+        (det / "img.txt").write_text("0 0.1 0.1 0.05 0.05\n", encoding="utf-8")
+        store = self._make_store(seg, det)
+        result = reconcile_label_file_for_image(store, "img")
+        assert result["conflicts"] == 1
+        assert result["moved_to_detect"] == 0
+        assert (seg / "img.txt").exists()  # source untouched
+
+    def test_shared_dir_skips_reconcile(self, tmp_path):
+        shared = tmp_path / "labels"
+        shared.mkdir()
+        (shared / "img.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        cr = ClassRegistry({0: "a"})
+        store = AnnotationStore(cr, str(shared))  # seeds both fields equal
+        result = reconcile_label_file_for_image(store, "img")
+        assert result["moved_to_seg"] == 0
+        assert result["moved_to_detect"] == 0
+        assert (shared / "img.txt").exists()
+
+    def test_creates_target_dir_on_demand(self, tmp_path):
+        seg = tmp_path / "txt"
+        det = tmp_path / "txt_detect"  # not created
+        seg.mkdir()
+        (seg / "img.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        store = self._make_store(seg, det)
+        result = reconcile_label_file_for_image(store, "img")
+        assert result["moved_to_detect"] == 1
+        assert det.is_dir()
+        assert (det / "img.txt").exists()
+
+
+class TestCleanupEmptyLabelFiles:
+    def test_removes_only_empty_txt(self, tmp_path):
+        d = tmp_path / "labels"
+        d.mkdir()
+        (d / "empty.txt").write_text("", encoding="utf-8")
+        (d / "real.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        result = cleanup_empty_label_files(str(d))
+        assert result["removed"] == 1
+        assert not (d / "empty.txt").exists()
+        assert (d / "real.txt").exists()
+
+    def test_preserves_classes_txt(self, tmp_path):
+        d = tmp_path / "labels"
+        d.mkdir()
+        (d / "classes.txt").write_text("", encoding="utf-8")
+        (d / "img.txt").write_text("", encoding="utf-8")
+        result = cleanup_empty_label_files(str(d))
+        # classes.txt skipped even when empty
+        assert (d / "classes.txt").exists()
+        assert not (d / "img.txt").exists()
+        assert result["removed"] == 1
+
+    def test_handles_multiple_dirs_dedup(self, tmp_path):
+        a = tmp_path / "a"
+        b = tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        (a / "x.txt").write_text("", encoding="utf-8")
+        (b / "y.txt").write_text("", encoding="utf-8")
+        # Pass same dir twice — should not double-count or error.
+        result = cleanup_empty_label_files(str(a), str(b), str(a), "")
+        assert result["removed"] == 2
+        assert not (a / "x.txt").exists()
+        assert not (b / "y.txt").exists()
+
+    def test_nonexistent_dir(self, tmp_path):
+        result = cleanup_empty_label_files(str(tmp_path / "nope"))
+        assert result["removed"] == 0

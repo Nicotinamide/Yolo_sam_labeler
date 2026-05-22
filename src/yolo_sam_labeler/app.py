@@ -22,6 +22,8 @@ from .io_utils import (
     load_class_names, save_class_names,
     inspect_label_dir_format,
     split_mixed_label_dir,
+    reconcile_label_file_for_image,
+    cleanup_empty_label_files,
 )
 from .canvas import (
     ImageCanvas, CoordTransformer, DrawState,
@@ -581,6 +583,10 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
 
     def _load_directory(self, path: str):
         old_image_dir = self.image_dir
+        # Clean up zero-byte .txt artifacts (e.g. left after a Mask/Box
+        # conversion that emptied the other-format file) before we lose
+        # track of which dirs they live in.
+        self._cleanup_empty_files(reason="切目录")
         # Clear old annotations immediately so they never bleed into the new directory
         self.store.masks.clear()
         self.store.boxes.clear()
@@ -671,6 +677,11 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         # Load annotations from disk without treating it as an edit.
         self._loading_image = True
         try:
+            stem = os.path.splitext(os.path.basename(path))[0]
+            recon = reconcile_label_file_for_image(self.store, stem)
+            for line in recon.get("actions", []):
+                level = "ok" if "已搬移" in line else "warn"
+                self._log(line, level)
             load_labels_for_image(self.store, path, w, h)
         finally:
             self._loading_image = False
@@ -1414,9 +1425,17 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         QTimer.singleShot(0, self._refresh_canvas)
 
     def closeEvent(self, event):
+        self._cleanup_empty_files(reason="退出")
         self._remember_paths()
         self._persist_classes()
         self.sam.shutdown()
         if hasattr(self.yolo, "shutdown"):
             self.yolo.shutdown()
         super().closeEvent(event)
+
+    def _cleanup_empty_files(self, reason: str = ""):
+        """Remove zero-byte ``.txt`` files in seg_dir and detect_dir."""
+        result = cleanup_empty_label_files(self.store.seg_dir, self.store.detect_dir)
+        if result["removed"]:
+            ctx = f" ({reason})" if reason else ""
+            self._log(f"清理空标签文件{ctx}: {result['removed']} 个", "info")

@@ -20,6 +20,8 @@ from .io_utils import (
     scan_images, discover_image_dir, load_image_bgr,
     save_labels, load_labels_for_image,
     load_class_names, save_class_names,
+    inspect_label_dir_format,
+    split_mixed_label_dir,
 )
 from .canvas import (
     ImageCanvas, CoordTransformer, DrawState,
@@ -51,17 +53,13 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         self.settings = QSettings("yolo-sam-labeler", "yolo-sam-labeler")
 
         stored_image_dir = self._setting_str("paths/image_dir")
-        stored_label_dir = self._setting_str("paths/label_dir")
+        stored_legacy_label_dir = self._setting_str("paths/label_dir")
+        stored_seg_dir = self._setting_str("paths/seg_dir")
+        stored_detect_dir = self._setting_str("paths/detect_dir")
         stored_sam_checkpoint = self._setting_str("paths/sam_checkpoint")
         image_dir_arg = image_dir
-        label_dir_arg = label_dir
+        label_dir_arg = label_dir  # CLI / constructor only
         image_dir = image_dir_arg or stored_image_dir
-        if label_dir_arg:
-            label_dir = label_dir_arg
-        elif image_dir_arg:
-            label_dir = self._auto_label_dir_for(image_dir_arg)
-        else:
-            label_dir = stored_label_dir
         sam_checkpoint = sam_checkpoint or stored_sam_checkpoint
         if stored_image_dir and image_dir and not os.path.isdir(image_dir) and os.path.isdir(stored_image_dir):
             image_dir = stored_image_dir
@@ -74,13 +72,30 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
             sam_checkpoint = stored_sam_checkpoint
         model_type = model_type or self._setting_str("model/sam_type", "vit_h")
         yolo_weights = yolo_weights or self._setting_str("paths/yolo_weights")
-        if image_dir and not label_dir:
-            label_dir = self._auto_label_dir_for(image_dir)
 
         # --- data model ---
         self.image_dir = image_dir or ""
-        self.classes = ClassRegistry(self._load_startup_classes(image_dir, label_dir))
-        self.store = AnnotationStore(self.classes, label_dir)
+        # Resolve a hint for class-file lookup. Real seg/detect dirs are set
+        # by _seed_label_dirs below.
+        startup_label_hint = (
+            label_dir_arg
+            or stored_seg_dir
+            or stored_detect_dir
+            or stored_legacy_label_dir
+            or (self._auto_label_dir_for(image_dir) if image_dir else "")
+        )
+        self.classes = ClassRegistry(
+            self._load_startup_classes(image_dir, startup_label_hint)
+        )
+        # Construct an empty store. The two label-dir fields are populated
+        # below from explicit args / stored settings / auto-discovery.
+        self.store = AnnotationStore(self.classes, "")
+        self._seed_label_dirs(
+            label_dir_arg=label_dir_arg,
+            stored_seg_dir=stored_seg_dir,
+            stored_detect_dir=stored_detect_dir,
+            stored_legacy_label_dir=stored_legacy_label_dir,
+        )
 
         # --- services ---
         self.sam = SamService(self)
@@ -162,6 +177,12 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         act_label_dir = QAction("选择标签目录…", self)
         act_label_dir.triggered.connect(self._pick_label_dir)
         file_menu.addAction(act_label_dir)
+        act_seg_dir = QAction("选择分割标签目录…", self)
+        act_seg_dir.triggered.connect(self._pick_seg_dir)
+        file_menu.addAction(act_seg_dir)
+        act_detect_dir = QAction("选择检测标签目录…", self)
+        act_detect_dir.triggered.connect(self._pick_detect_dir)
+        file_menu.addAction(act_detect_dir)
         act_class_file = QAction("载入类别文件…", self)
         act_class_file.triggered.connect(self._pick_class_file)
         file_menu.addAction(act_class_file)
@@ -211,6 +232,9 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         act_convert.setShortcut(QKeySequence("T"))
         act_convert.triggered.connect(self._convert_hovered_annotation)
         tool_menu.addAction(act_convert)
+        act_split_dir = QAction("整理标签目录…", self)
+        act_split_dir.triggered.connect(self._run_split_wizard)
+        tool_menu.addAction(act_split_dir)
 
         model_menu = mb.addMenu("模型")
         act_sam_ckpt = QAction("加载 SAM 权重…", self)
@@ -428,7 +452,10 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
 
     def _remember_paths(self):
         self.settings.setValue("paths/image_dir", self.image_dir)
-        self.settings.setValue("paths/label_dir", self.store.label_dir)
+        self.settings.setValue("paths/seg_dir", self.store.seg_dir)
+        self.settings.setValue("paths/detect_dir", self.store.detect_dir)
+        # ``paths/label_dir`` is read-only legacy: migrated once by
+        # _seed_label_dirs at startup and never written again.
         self.settings.setValue("paths/sam_checkpoint", self.sam_checkpoint)
         self.settings.setValue("paths/yolo_weights", self.yolo_weights_path)
         self.settings.setValue("model/sam_type", self.model_type)
@@ -552,33 +579,36 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
 
     def _load_directory(self, path: str):
         old_image_dir = self.image_dir
-        old_auto_label_dir = self._auto_label_dir_for(old_image_dir)
         # Clear old annotations immediately so they never bleed into the new directory
         self.store.masks.clear()
         self.store.boxes.clear()
         self.store.last_kind = ""
         self.image_dir = path
         switching_dirs = bool(old_image_dir) and not self._same_path(old_image_dir, path)
-        label_was_tied_to_old_dir = switching_dirs and self._is_subpath(self.store.label_dir, old_image_dir)
-        if (
-            not self.store.label_dir
-            or self._same_path(self.store.label_dir, old_auto_label_dir)
-            or label_was_tied_to_old_dir
-        ):
-            # Will be set properly after we discover the actual image dir
-            self.store.label_dir = ""
-        self._load_classes_for_current_dirs()
+        # Drop seg/detect dirs that lived inside the old project; keep dirs
+        # outside it (the user explicitly pinned them somewhere stable).
+        if switching_dirs:
+            if self.store.seg_dir and self._is_subpath(self.store.seg_dir, old_image_dir):
+                self.store.seg_dir = ""
+            if self.store.detect_dir and self._is_subpath(self.store.detect_dir, old_image_dir):
+                self.store.detect_dir = ""
         # Discover actual image location (might be a subdirectory)
         actual_image_dir = discover_image_dir(path)
         if actual_image_dir != path:
             self._log(f"图片目录: {actual_image_dir}", "info")
         self.image_paths = scan_images(actual_image_dir)
-        # Discover label directory (match txt stems against image stems)
-        if not self.store.label_dir:
+        # Auto-discover the label directory if neither seg nor detect dir is set.
+        if not self.store.seg_dir and not self.store.detect_dir:
             discovered = self._discover_label_dir(path, actual_image_dir)
-            self.store.label_dir = discovered
-            if os.path.isdir(discovered):
-                self._log(f"标签目录: {discovered}", "info")
+            if discovered:
+                self._handle_picked_dir(discovered)
+                self._maybe_offer_sibling_pair(discovered)
+                self._log_label_dirs(picked=discovered, log_zh="标签目录")
+        else:
+            # Keep showing where labels go even when they were preserved.
+            picked = self.store.seg_dir or self.store.detect_dir
+            self._log_label_dirs(picked=picked, log_zh="标签目录 (沿用)")
+        self._load_classes_for_current_dirs()
         self.index = 0
         # Reset ROI — old ROI mask dimensions won't match new images
         self.roi_mode = "full"
@@ -660,7 +690,7 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
     def _save_current(self, silent: bool = False) -> bool:
         if self.image_bgr is None:
             return False
-        if not self.store.label_dir:
+        if not self.store.seg_dir and not self.store.detect_dir:
             if silent:
                 if not self._autosave_warned:
                     self._log("自动保存失败：请先选择标签保存目录。", "warn")
@@ -672,11 +702,37 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         stem = os.path.splitext(os.path.basename(path))[0]
         h, w = self.image_shape
         self._persist_classes()
-        save_labels(self.store, stem, w, h)
+        report = save_labels(self.store, stem, w, h)
+        self._finalize_shared_after_save(report)
         self._autosave_warned = False
-        if not silent:
+        self._log_save_report(report, stem)
+        if not silent and not (
+            report.refused_seg or report.refused_detect or report.conflict_shared
+        ):
             self._log(f"已保存: {stem}.txt", "ok")
         return True
+
+    def _log_save_report(self, report, stem: str):
+        """Translate a SaveReport into user-facing log lines."""
+        if report.refused_seg:
+            self._log(
+                f"拒写保护: {stem} 的分割文件实际是检测格式，未覆盖。", "warn"
+            )
+        if report.refused_detect:
+            self._log(
+                f"拒写保护: {stem} 的检测文件实际是分割格式，未覆盖。", "warn"
+            )
+        if report.conflict_shared:
+            self._log(
+                "共用目录冲突: 同图同时含分割和检测，已只写其中一种。", "warn"
+            )
+        if report.cleared_seg:
+            self._log(f"分割文件已清空: {stem}.txt", "info")
+        if report.cleared_detect:
+            self._log(f"检测文件已清空: {stem}.txt", "info")
+        if report.skipped_no_dir:
+            kinds = "/".join(report.skipped_no_dir)
+            self._log(f"未配置 {kinds} 目录，对应类型未保存。", "info")
 
     def _autosave_current(self):
         self._save_current(silent=True)
@@ -909,14 +965,369 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
             self._load_directory(d)
 
     def _pick_label_dir(self):
-        d = QFileDialog.getExistingDirectory(self, "选择标签保存目录", self.store.label_dir or ".")
+        d = QFileDialog.getExistingDirectory(self, "选择标签保存目录", self._first_label_dir() or ".")
         if d:
-            self.store.label_dir = d
-            self._load_classes_for_current_dirs()
+            self._apply_label_dir_choice(d, kind=None)
             self._remember_paths()
-            self._log(f"标签目录: {d}", "ok")
             if self.image_bgr is not None:
                 self._load_current_image()
+
+    def _pick_seg_dir(self):
+        start = self.store.seg_dir or self._first_label_dir() or "."
+        d = QFileDialog.getExistingDirectory(self, "选择分割标签目录", start)
+        if not d:
+            return
+        self._apply_label_dir_choice(d, kind="seg")
+        self._remember_paths()
+        if self.image_bgr is not None:
+            self._load_current_image()
+
+    def _pick_detect_dir(self):
+        start = self.store.detect_dir or self._first_label_dir() or "."
+        d = QFileDialog.getExistingDirectory(self, "选择检测标签目录", start)
+        if not d:
+            return
+        self._apply_label_dir_choice(d, kind="detect")
+        self._remember_paths()
+        if self.image_bgr is not None:
+            self._load_current_image()
+
+    # ------------------------------------------------------------------
+    # Label directory resolution (single source of truth: store.seg_dir/.detect_dir)
+    # ------------------------------------------------------------------
+
+    def _first_label_dir(self) -> str:
+        """Return the most representative directory for dialogs and pickers."""
+        return self.store.seg_dir or self.store.detect_dir or ""
+
+    @staticmethod
+    def _sibling_label_dir(path: str, want_kind: str) -> str:
+        """Return a sibling directory path for ``want_kind`` next to ``path``.
+
+        Substitutes ``_seg``/``-seg``/``_detect``/``-detect`` suffixes when
+        present, else appends ``_<want_kind>``. Never creates the directory.
+        """
+        if not path:
+            return ""
+        path = os.path.normpath(path)
+        base = os.path.basename(path)
+        parent = os.path.dirname(path)
+        other = "detect" if want_kind == "seg" else "seg"
+        for sep in ("_", "-"):
+            suffix = sep + other
+            if base.endswith(suffix):
+                stem = base[: -len(suffix)]
+                return os.path.join(parent, stem + sep + want_kind)
+        return path + "_" + want_kind
+
+    def _seed_label_dirs(self, label_dir_arg: str, stored_seg_dir: str,
+                         stored_detect_dir: str, stored_legacy_label_dir: str = ""):
+        """Initialize ``store.seg_dir`` / ``store.detect_dir`` at startup.
+
+        Decision tree (highest priority first):
+            1. ``label_dir_arg`` (CLI / explicit constructor): treat as a
+               picked directory and run :meth:`_handle_picked_dir`.
+            2. Persisted new keys (``paths/seg_dir`` / ``paths/detect_dir``):
+               restore them, seeding a sibling on the empty side if needed.
+            3. Legacy ``paths/label_dir`` migration: treat as case 1 and
+               clear the legacy key.
+            4. Otherwise leave both fields empty; they get set later by
+               :meth:`_load_directory` once an image dir is opened.
+        """
+        # Branch 1: explicit argument wins.
+        if label_dir_arg:
+            self.store.seg_dir = ""
+            self.store.detect_dir = ""
+            self._handle_picked_dir(label_dir_arg)
+            return
+
+        # Branch 2: validated new keys.
+        used_persisted = False
+        if stored_seg_dir and os.path.isdir(stored_seg_dir):
+            self.store.seg_dir = stored_seg_dir
+            used_persisted = True
+        else:
+            self.store.seg_dir = ""
+        if stored_detect_dir and os.path.isdir(stored_detect_dir):
+            self.store.detect_dir = stored_detect_dir
+            used_persisted = True
+        else:
+            self.store.detect_dir = ""
+
+        if used_persisted:
+            # Auto-fill the missing side so both kinds have a target.
+            if self.store.seg_dir and not self.store.detect_dir:
+                self.store.detect_dir = self._sibling_label_dir(
+                    self.store.seg_dir, "detect"
+                )
+            if self.store.detect_dir and not self.store.seg_dir:
+                self.store.seg_dir = self._sibling_label_dir(
+                    self.store.detect_dir, "seg"
+                )
+            return
+
+        # Branch 3: legacy migration.
+        if stored_legacy_label_dir and os.path.isdir(stored_legacy_label_dir):
+            self._handle_picked_dir(stored_legacy_label_dir)
+            self.settings.remove("paths/label_dir")
+            return
+
+        # Branch 4: nothing — caller (_load_directory) handles auto-discovery.
+
+    def _apply_label_dir_choice(self, path: str, kind: str | None):
+        """Handle a directory the user picked (single or kind-specific).
+
+        ``kind`` ∈ {``None``, ``"seg"``, ``"detect"``}.
+        """
+        if kind == "seg":
+            self.store.seg_dir = path
+            if not self.store.detect_dir:
+                self.store.detect_dir = self._sibling_label_dir(path, "detect")
+            log_zh = "分割标签目录"
+        elif kind == "detect":
+            self.store.detect_dir = path
+            if not self.store.seg_dir:
+                self.store.seg_dir = self._sibling_label_dir(path, "seg")
+            log_zh = "检测标签目录"
+        else:
+            # Unified picker — wipe and let the sniffer decide.
+            self.store.seg_dir = ""
+            self.store.detect_dir = ""
+            self._handle_picked_dir(path)
+            self._maybe_offer_sibling_pair(path)
+            log_zh = "标签目录"
+        self._load_classes_for_current_dirs()
+        self._log_label_dirs(picked=path, log_zh=log_zh)
+
+    def _handle_picked_dir(self, path: str):
+        """Sniff ``path`` and route to seg_dir/detect_dir accordingly."""
+        if not path:
+            return
+        kind, _stats = inspect_label_dir_format(path)
+        if kind == "seg":
+            self.store.seg_dir = path
+            if not self.store.detect_dir:
+                self.store.detect_dir = self._sibling_label_dir(path, "detect")
+        elif kind == "detect":
+            self.store.detect_dir = path
+            if not self.store.seg_dir:
+                self.store.seg_dir = self._sibling_label_dir(path, "seg")
+        elif kind == "mixed":
+            self._handle_mixed_label_dir(path)
+        else:  # "empty" or unknown
+            # Shared seed: both fields point to the same path. The first save
+            # will collapse this into a single-kind layout via
+            # :meth:`_finalize_shared_after_save`.
+            self.store.seg_dir = path
+            self.store.detect_dir = path
+
+    def _handle_mixed_label_dir(self, path: str):
+        """Offer to split a mixed seg+detect directory into two siblings."""
+        kind, stats = inspect_label_dir_format(path)
+        # ``kind`` is "mixed" when we get here.
+        seg_n = stats["seg"]
+        det_n = stats["detect"]
+        # Default destinations: keep the majority kind in place, move the
+        # minority into a sibling.
+        if seg_n >= det_n:
+            seg_dst = path
+            detect_dst = path + "_detect"
+            keep_label = "分割"
+            move_label = f"检测 → {os.path.basename(detect_dst)}"
+        else:
+            seg_dst = path + "_seg"
+            detect_dst = path
+            keep_label = "检测"
+            move_label = f"分割 → {os.path.basename(seg_dst)}"
+
+        preview = split_mixed_label_dir(path, seg_dst, detect_dst, dry_run=True)
+        moved = preview["moved_seg"] + preview["moved_detect"]
+        conflicts = preview["conflicts"]
+
+        box = QMessageBox(self)
+        box.setWindowTitle("发现混合标签目录")
+        box.setIcon(QMessageBox.Question)
+        box.setText(
+            f"目录里同时存在两种格式的 YOLO 标签:\n  {path}\n\n"
+            f"  分割 (seg): {seg_n} 个\n"
+            f"  检测 (detect): {det_n} 个"
+        )
+        body = (
+            f"建议拆为两个目录，保留 {keep_label} 在原处，{move_label}。\n"
+            f"将移动 {moved} 个文件。"
+        )
+        if conflicts:
+            body += f"\n注意: {conflicts} 个目标路径已存在，会被跳过。"
+        box.setInformativeText(body)
+        split_btn = box.addButton("拆分", QMessageBox.AcceptRole)
+        share_btn = box.addButton("共用此目录", QMessageBox.NoRole)
+        cancel_btn = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(split_btn)
+        box.exec_()
+        clicked = box.clickedButton()
+
+        if clicked is split_btn:
+            result = split_mixed_label_dir(path, seg_dst, detect_dst, dry_run=False)
+            self.store.seg_dir = result["seg_dst"]
+            self.store.detect_dir = result["detect_dst"]
+            self._log(
+                "已拆分: 移动 "
+                f"{result['moved_seg']} seg + {result['moved_detect']} detect"
+                f"，保留 {result['kept_seg']} seg + {result['kept_detect']} detect"
+                f"，跳过 {result['skipped_unknown']} 未识别 / "
+                f"{result['skipped_empty']} 空文件"
+                + (f" / {result['conflicts']} 冲突" if result['conflicts'] else ""),
+                "ok",
+            )
+        elif clicked is share_btn:
+            self.store.seg_dir = path
+            self.store.detect_dir = path
+            self._log("混合目录: 共用单一目录 (按文件内容分流)", "info")
+        else:
+            self._log("取消混合目录处理，标签目录未变更。", "warn")
+
+    def _run_split_wizard(self):
+        """Manual entry point for "工具 → 整理标签目录…"."""
+        path = self._first_label_dir()
+        if not path or not os.path.isdir(path):
+            QMessageBox.information(self, "整理标签目录", "请先选择一个标签目录。")
+            return
+        kind, _stats = inspect_label_dir_format(path)
+        if kind == "mixed":
+            self._handle_mixed_label_dir(path)
+            self._remember_paths()
+            return
+        QMessageBox.information(
+            self, "整理标签目录",
+            f"当前标签目录格式: {kind}\n无需拆分。"
+        )
+
+    def _log_label_dirs(self, picked: str, log_zh: str):
+        seg = self.store.seg_dir
+        det = self.store.detect_dir
+        self._log(f"{log_zh}: {picked}", "ok")
+        if seg and det and os.path.abspath(seg) == os.path.abspath(det):
+            self._log("分割与检测共用一个目录，按文件内容自动分流。", "info")
+        else:
+            if seg:
+                self._log(f"分割: {seg}", "info")
+            if det:
+                self._log(f"检测: {det}", "info")
+
+    def _maybe_offer_sibling_pair(self, picked: str):
+        """If the picked dir is a clean seg-or-detect, look for a sibling pair."""
+        if not picked or not os.path.isdir(picked):
+            return
+        own_kind, _ = inspect_label_dir_format(picked)
+        if own_kind not in ("seg", "detect"):
+            return
+        other = "detect" if own_kind == "seg" else "seg"
+        sibling = self._find_sibling_label_dir(picked, other)
+        if not sibling:
+            return
+        ans = QMessageBox.question(
+            self,
+            "发现配套标签目录",
+            (
+                f"在同级目录下找到了 {other} 标签:\n  {sibling}\n\n"
+                "是否同时使用两个目录?\n"
+                f"  - 分割: {picked if own_kind == 'seg' else sibling}\n"
+                f"  - 检测: {picked if own_kind == 'detect' else sibling}"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if ans == QMessageBox.Yes:
+            if other == "detect":
+                self.store.detect_dir = sibling
+            else:
+                self.store.seg_dir = sibling
+
+    @staticmethod
+    def _find_sibling_label_dir(picked: str, want_kind: str) -> str:
+        """Search for a sibling dir whose contents match ``want_kind``."""
+        if not picked or not os.path.isdir(picked):
+            return ""
+        picked = os.path.normpath(picked)
+        parent = os.path.dirname(picked)
+        own_basename = os.path.basename(picked)
+        candidates: list[str] = [picked + "_" + want_kind]
+        for suffix in ("_seg", "_detect", "-seg", "-detect"):
+            if own_basename.endswith(suffix):
+                stem = own_basename[: -len(suffix)]
+                candidates.append(os.path.join(parent, stem + "_" + want_kind))
+                candidates.append(os.path.join(parent, stem + "-" + want_kind))
+                break
+        candidates.append(os.path.join(parent, "labels_" + want_kind))
+        candidates.append(os.path.join(parent, want_kind + "_labels"))
+        candidates.append(os.path.join(parent, want_kind))
+
+        seen = {os.path.abspath(picked)}
+        for cand in candidates:
+            ap = os.path.abspath(cand)
+            if ap in seen or not os.path.isdir(cand):
+                continue
+            seen.add(ap)
+            cand_kind, _ = inspect_label_dir_format(cand)
+            if cand_kind == want_kind:
+                return cand
+        return ""
+
+    def _finalize_shared_after_save(self, report):
+        """Collapse a shared (seg_dir == detect_dir) seed after a save.
+
+        Triggered when the saver actually committed annotations. Picks one
+        kind to keep at the shared path and re-targets the other to a
+        sibling. ``report.conflict_shared`` triggers an interactive prompt.
+        """
+        if not self.store.seg_dir or not self.store.detect_dir:
+            return
+        if os.path.abspath(self.store.seg_dir) != os.path.abspath(self.store.detect_dir):
+            return
+
+        # Conflict: both kinds present in the shared dir. Ask the user which
+        # one should keep the shared path.
+        if getattr(report, "conflict_shared", False):
+            self._resolve_shared_conflict()
+            return
+
+        has_masks = bool(self.store.masks)
+        has_boxes = bool(self.store.boxes)
+        if has_masks and not has_boxes:
+            self.store.detect_dir = self._sibling_label_dir(self.store.seg_dir, "detect")
+            self._log("标签格式已自动定为: 分割", "ok")
+            self._log(f"检测目录改为: {self.store.detect_dir} (按需创建)", "info")
+        elif has_boxes and not has_masks:
+            self.store.seg_dir = self._sibling_label_dir(self.store.detect_dir, "seg")
+            self._log("标签格式已自动定为: 检测", "ok")
+            self._log(f"分割目录改为: {self.store.seg_dir} (按需创建)", "info")
+        # both / neither → keep both fields; per-file sniffer handles it.
+
+    def _resolve_shared_conflict(self):
+        """Ask the user which kind keeps the shared path on conflict."""
+        path = self.store.seg_dir
+        box = QMessageBox(self)
+        box.setWindowTitle("共用目录冲突")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(
+            f"分割与检测当前共用同一目录:\n  {path}\n\n"
+            "本图同时含分割和检测标签，但同一文件不能存两种格式。\n"
+            "请选择哪一类留在原目录，另一类将移到 sibling 目录。"
+        )
+        keep_seg = box.addButton("分割留下", QMessageBox.AcceptRole)
+        keep_det = box.addButton("检测留下", QMessageBox.NoRole)
+        box.addButton("稍后处理", QMessageBox.RejectRole)
+        box.setDefaultButton(keep_seg)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is keep_seg:
+            self.store.detect_dir = self._sibling_label_dir(path, "detect")
+            self._log(f"分割留在 {path}；检测改写到 {self.store.detect_dir}", "ok")
+        elif clicked is keep_det:
+            self.store.seg_dir = self._sibling_label_dir(path, "seg")
+            self._log(f"检测留在 {path}；分割改写到 {self.store.seg_dir}", "ok")
+        else:
+            self._log("共用冲突未处理，下次保存仍可能丢失一类。", "warn")
 
     def _pick_sam_ckpt(self):
         path, _ = QFileDialog.getOpenFileName(

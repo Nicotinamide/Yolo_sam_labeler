@@ -44,12 +44,13 @@ def test_load_labels_ensures_unknown_class_ids(tmp_path):
 
 
 def test_save_labels_overwrites_empty_detection_file(tmp_path):
-    label_dir = tmp_path / "labels"
+    """Empty boxes list should clear an existing detect file in detect_dir."""
     detect_dir = tmp_path / "labels_detect"
     detect_dir.mkdir()
     (detect_dir / "img.txt").write_text("0 0.5 0.5 0.2 0.2", encoding="utf-8")
 
-    store = AnnotationStore(ClassRegistry({0: "zero"}), str(label_dir))
+    store = AnnotationStore(ClassRegistry({0: "zero"}), "")
+    store.detect_dir = str(detect_dir)
     save_labels(store, "img", 100, 100)
 
     assert os.path.exists(detect_dir / "img.txt")

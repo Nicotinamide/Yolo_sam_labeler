@@ -365,3 +365,51 @@ python -m pytest tests/test_models.py tests/test_models_extended.py \
                   tests/test_io_utils.py tests/test_io_utils_extended.py \
                   tests/test_yolo_service.py tests/test_backends.py tests/test_colors.py
 ```
+
+
+---
+
+## 标签目录配置（label-storage 子系统）
+
+### 数据模型
+
+`AnnotationStore` 持两个目录字段：
+
+- `seg_dir`：分割（YOLO seg）标签所在目录。`""` 表示不读不写。
+- `detect_dir`：检测（YOLO detect）标签所在目录。`""` 表示不读不写。
+
+两者可以指向同一物理目录（共享布局），加载时按文件首条数据行的 token 数判定（5 列 = detect，1 + 2N ≥ 7 列 = seg）。
+
+### 文件菜单入口
+
+| 菜单项 | 行为 |
+|---|---|
+| 选择标签目录… | 嗅探 → 自动归类（seg/detect/mixed/empty）。混合时弹拆分对话框；空目录共享种子，首次保存收敛。 |
+| 选择分割标签目录… | 强制设置 seg_dir；detect_dir 为空时自动 seed sibling。 |
+| 选择检测标签目录… | 对称。 |
+| 工具 → 整理标签目录… | 当前 seg_dir == detect_dir 且为混合时，触发拆分对话框。 |
+
+### 关键场景预期
+
+| 场景 | 预期 |
+|---|---|
+| 选空目录，画 box，保存 | 文件落到所选目录；seg_dir 自动改成 sibling（`<dir>_seg`），日志输出"标签格式已自动定为：检测"。重启后两字段均恢复。 |
+| 选 detect-only 目录，跑 SAM 出 mask，保存 | mask 写入 sibling `<dir>_seg/`；detect 文件不变；重启后两类都还在。 |
+| 选混合目录，点拆分 | 多数派留原地，少数派移到 sibling；seg_dir / detect_dir 各指一处；空文件 / 不识别 / classes.txt 都保留。 |
+| 共享目录 + 同图同时含 seg 和 detect 标签 | 保存时 SaveReport.conflict_shared 置位，UI 弹窗让用户选哪一类留下。 |
+| 切换图片目录到新项目 | 旧 image_dir 子树内的 seg/detect_dir 自动清空；外部路径保留。 |
+| 没设标签目录就按 S | 弹"无法保存，请先选标签目录"，不创建文件、不丢数据。 |
+| 旧版本 paths/label_dir 持久化 | 启动时一次性迁移到 seg_dir/detect_dir，旧键被清除。 |
+
+### 数据安全保护
+
+`_safe_overwrite` 在写入空内容时嗅探现存文件实际格式：
+
+- 同格式 / 未知 → 清空写。
+- 异格式 → **拒写**（数据丢失保护），SaveReport.refused_seg / refused_detect 置位，UI 输出警告。
+
+### 测试覆盖
+
+- `tests/test_io_utils.py` / `tests/test_io_utils_extended.py`：IO 单元 + SaveReport 字段 + 共享目录 + 拆分。
+- `tests/test_app_smoke.py`：MainWindow 决策树（_seed_label_dirs 四分支、_apply_label_dir_choice 三种 kind、image_dir 切换清空）。
+- 总计 165+ 个 pytest 用例覆盖此子系统。

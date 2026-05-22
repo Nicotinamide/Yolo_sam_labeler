@@ -176,12 +176,39 @@ class AnnotationStore(QObject):
     def __init__(self, classes: ClassRegistry, label_dir: str = ""):
         super().__init__()
         self.classes = classes
-        self.label_dir = label_dir
         self.masks: list[Mask] = []
         self.boxes: list[Box] = []
         self.image_width: int = 0
         self.image_height: int = 0
         self.last_kind: str = ""  # "mask" | "box" — latest edited annotation kind
+        # Two independent label directories.
+        # - ``seg_dir`` holds YOLO segmentation files (1 + 2N ≥ 7 tokens/line).
+        # - ``detect_dir`` holds YOLO detection files (exactly 5 tokens/line).
+        # Either may be ``""`` (no IO for that kind). They may also point at
+        # the same physical directory: in that case the loader sniffs each
+        # file's actual format (5 vs ≥7 tokens) so masks and boxes route
+        # correctly.
+        # The legacy ``label_dir`` constructor argument becomes a soft seed:
+        # whichever kind the directory is recognized as gets it; if the
+        # contents are unknown both fields are seeded so the first save is
+        # safe.
+        self.seg_dir: str = label_dir
+        self.detect_dir: str = label_dir
+
+    # ---- legacy alias -------------------------------------------------
+    @property
+    def label_dir(self) -> str:
+        """Backward-compatible accessor for code that asks for "the" label dir.
+
+        Returns ``seg_dir`` if set, else ``detect_dir``. New code should read
+        ``seg_dir`` / ``detect_dir`` directly.
+        """
+        return self.seg_dir or self.detect_dir
+
+    @label_dir.setter
+    def label_dir(self, value: str):
+        self.seg_dir = value
+        self.detect_dir = value
 
     # ---- annotation queries ----
 

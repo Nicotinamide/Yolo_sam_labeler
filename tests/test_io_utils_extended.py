@@ -457,8 +457,8 @@ class TestInspectLabelDirFormat:
         assert stats["empty"] == 3
 
     def test_majority_detect(self, tmp_path):
-        # 9 detect + 1 seg → detect wins (≥80%)
-        for i in range(9):
+        # 19 detect + 1 seg → detect wins (95%); below this falls into "mixed"
+        for i in range(19):
             (tmp_path / f"d{i}.txt").write_text(
                 "0 0.5 0.5 0.2 0.2\n", encoding="utf-8"
             )
@@ -467,6 +467,18 @@ class TestInspectLabelDirFormat:
         )
         kind, _ = inspect_label_dir_format(str(tmp_path))
         assert kind == "detect"
+
+    def test_below_majority_threshold_is_mixed(self, tmp_path):
+        # 9 detect + 1 seg → only 90%, no longer enough to auto-decide.
+        for i in range(9):
+            (tmp_path / f"d{i}.txt").write_text(
+                "0 0.5 0.5 0.2 0.2\n", encoding="utf-8"
+            )
+        (tmp_path / "s.txt").write_text(
+            "0 0.10 0.10 0.50 0.10 0.50 0.50 0.10 0.50\n", encoding="utf-8"
+        )
+        kind, _ = inspect_label_dir_format(str(tmp_path))
+        assert kind == "mixed"
 
     def test_mixed_split(self, tmp_path):
         for i in range(3):

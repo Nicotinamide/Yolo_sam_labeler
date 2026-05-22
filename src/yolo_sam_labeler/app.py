@@ -1105,7 +1105,13 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         """Sniff ``path`` and route to seg_dir/detect_dir accordingly."""
         if not path:
             return
-        kind, _stats = inspect_label_dir_format(path)
+        kind, stats = inspect_label_dir_format(path)
+        # Always surface what we saw so the user can sanity-check.
+        self._log(
+            f"目录嗅探: {kind} (seg={stats['seg']}, detect={stats['detect']}, "
+            f"empty={stats['empty']}, scanned={stats['scanned']}/{stats['total']})",
+            "info",
+        )
         if kind == "seg":
             self.store.seg_dir = path
             if not self.store.detect_dir:

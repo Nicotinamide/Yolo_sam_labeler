@@ -420,12 +420,20 @@ def inspect_label_dir_format(label_dir: str, sample_size: int = 20) -> tuple[str
 
     Returns ``(kind, stats)`` where ``kind`` is one of:
 
-    - ``"seg"`` / ``"detect"`` if all (or ≥80% of) format-bearing files agree.
+    - ``"seg"`` / ``"detect"`` if all (or ≥95% of) format-bearing files agree.
     - ``"empty"`` if the directory has no recognizable YOLO file.
     - ``"mixed"`` if both formats appear without a clear majority.
 
     ``stats`` contains the raw counts: ``seg``, ``detect``, ``empty``,
     ``scanned``, ``total``.
+
+    Notes:
+        - Only the first valid data line of each file is parsed (``5`` tokens
+          → detect, ``≥7`` with even-coordinate-pairs → seg). YOLO writes one
+          format per file so a single line is enough.
+        - Sampling stops after ``sample_size`` *format-bearing* files have
+          been classified. The default of ``20`` keeps directory scans cheap
+          while staying robust enough for typical projects.
     """
     stats = {"seg": 0, "detect": 0, "empty": 0, "scanned": 0, "total": 0}
     if not label_dir or not os.path.isdir(label_dir):
@@ -467,9 +475,9 @@ def inspect_label_dir_format(label_dir: str, sample_size: int = 20) -> tuple[str
         return "detect", stats
     if stats["detect"] == 0:
         return "seg", stats
-    if stats["seg"] >= 0.8 * decided:
+    if stats["seg"] >= 0.95 * decided:
         return "seg", stats
-    if stats["detect"] >= 0.8 * decided:
+    if stats["detect"] >= 0.95 * decided:
         return "detect", stats
     return "mixed", stats
 

@@ -12,21 +12,25 @@ cd "$SCRIPT_DIR"
 # 覆盖 venv 自己的 PyQt5。我们的代码会修复，但 unset 一下更稳妥。
 unset QT_QPA_PLATFORM_PLUGIN_PATH
 
+check_runtime() {
+    local py="$1"
+    "$py" -c "import yolo_sam_labeler, torch, cv2; from PyQt5 import QtCore, QtWidgets" 2>/dev/null
+}
+
 # ----------------------------------------------------------------------------
 # 1. 已激活的 conda 环境（用户跑了 conda activate xxx）
 #    优先使用它，因为用户显式选择了这个环境。
 # ----------------------------------------------------------------------------
 if [ -n "$CONDA_PREFIX" ] && [ -x "$CONDA_PREFIX/bin/python" ]; then
-    if "$CONDA_PREFIX/bin/python" -c "import yolo_sam_labeler" 2>/dev/null; then
+    if check_runtime "$CONDA_PREFIX/bin/python"; then
         exec "$CONDA_PREFIX/bin/python" -m yolo_sam_labeler "$@"
     else
-        echo "⚠ 已激活 conda 环境 ($CONDA_DEFAULT_ENV) 但缺少依赖。"
+        echo "⚠ 已激活 conda 环境 ($CONDA_DEFAULT_ENV) 但缺少运行依赖。"
         echo ""
-        echo "  请在该环境里运行:"
-        echo "    pip install -e ."
-        echo "    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124"
-        echo ""
-        echo "  或者退出 conda (conda deactivate) 后用 install.sh 走 uv 路径。"
+        echo "  请运行:"
+        echo "    bash install.sh --conda"
+        echo "  或者退出 conda 后运行:"
+        echo "    bash install.sh --uv"
         exit 1
     fi
 fi
@@ -34,11 +38,11 @@ fi
 # ----------------------------------------------------------------------------
 # 2. 项目本地 .venv (uv 创建的)
 # ----------------------------------------------------------------------------
-if [ -x ".venv/bin/yolo-sam-label" ]; then
-    exec .venv/bin/yolo-sam-label "$@"
-fi
 if [ -x ".venv/bin/python" ]; then
-    if .venv/bin/python -c "import yolo_sam_labeler, torch" 2>/dev/null; then
+    if check_runtime ".venv/bin/python"; then
+        if [ -x ".venv/bin/yolo-sam-label" ]; then
+            exec .venv/bin/yolo-sam-label "$@"
+        fi
         exec .venv/bin/python -m yolo_sam_labeler "$@"
     else
         echo "⚠ .venv 存在但依赖不全。请重新运行 install.sh。"

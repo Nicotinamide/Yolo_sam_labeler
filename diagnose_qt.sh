@@ -7,10 +7,21 @@ set +e
 echo "=== Qt xcb 插件诊断 ==="
 echo ""
 
-# 找到 .venv 里的 PyQt5 路径
-PYQT_DIR=$(.venv/bin/python -c "import PyQt5, os; print(os.path.dirname(PyQt5.__file__))" 2>/dev/null)
+if [ -n "$CONDA_PREFIX" ] && [ -x "$CONDA_PREFIX/bin/python" ]; then
+    PY="$CONDA_PREFIX/bin/python"
+elif [ -x ".venv/bin/python" ]; then
+    PY=".venv/bin/python"
+else
+    echo "✗ 未找到可用的 Python 环境"
+    exit 1
+fi
+
+echo "Python: $PY"
+
+# 找到当前环境里的 PyQt5 路径
+PYQT_DIR=$("$PY" -c "import PyQt5, os; print(os.path.dirname(PyQt5.__file__))" 2>/dev/null)
 if [ -z "$PYQT_DIR" ]; then
-    echo "✗ 未找到 .venv 中的 PyQt5"
+    echo "✗ 未找到当前环境中的 PyQt5"
     exit 1
 fi
 echo "PyQt5 目录: $PYQT_DIR"
@@ -39,7 +50,7 @@ echo "  XDG_SESSION_TYPE=$XDG_SESSION_TYPE"
 echo ""
 
 echo "=== 详细 Qt 调试 (运行应用) ==="
-QT_DEBUG_PLUGINS=1 .venv/bin/python -c "
+QT_DEBUG_PLUGINS=1 "$PY" -c "
 from PyQt5.QtWidgets import QApplication
 import sys
 app = QApplication(sys.argv)

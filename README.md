@@ -212,15 +212,21 @@ yolo-sam-label \
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `--image-dir` | 图片目录 | 当前目录 |
-| `--label-dir` | 标签保存目录 | `IMAGE_DIR/labels/` |
+| `--label-dir` | 标签目录种子（首次启动用） | `IMAGE_DIR/labels/` |
 | `--sam-checkpoint` | SAM 权重路径 | 自动搜索当前目录 |
 | `--model-type` | SAM 模型类型：`vit_h` / `vit_l` / `vit_b` | `vit_h` |
 | `--yolo-weights` | YOLO 权重路径（可选） | 无 |
 
-- 只指定图片目录时，标签自动保存到 `IMAGE_DIR/labels/`
-- 分割 mask → `labels/*.txt`（YOLO seg 格式）
-- 检测框 → `labels_detect/*.txt`（YOLO detect 格式）
-- 两种格式互不覆盖
+### 标签目录的工作方式
+
+应用维护两个独立目录：分割（`seg_dir`）和检测（`detect_dir`）。两者可以指向同一物理目录（共享布局），也可以分开（推荐）。
+
+- **菜单 → 文件 → 选择标签目录…**：自动嗅探目录格式（seg / detect / mixed / empty）。混合时弹拆分对话框；空目录两类共用，首次保存时自动定型并自动 seed sibling（`<dir>_seg` 或 `<dir>_detect`）。
+- **菜单 → 高级 → 单独指定分割目录… / 单独指定检测目录…**：强制把当前目录设给某一类；另一类未设置时自动 seed sibling。
+- **菜单 → 工具 → 整理标签目录…**：当前两类共用同一混合目录时，触发拆分对话框（多数派留原地，少数派移到 sibling）。
+- 没有设置任何目录就保存：弹提示「请先选标签目录」，不会丢数据。
+- 切换图片目录到新项目时，原先位于旧 image_dir 子树内的标签目录会自动清空，外部路径保留。
+- 数据安全：写入空内容时会嗅探现存文件实际格式；格式不匹配时**拒写**并发警告，绝不覆盖异格式数据。
 
 ## SAM 权重
 
@@ -318,7 +324,7 @@ yolo_sam_labeler/
 │       ├── factory.py          # 文件名 → 后端选择
 │       ├── sam1.py             # SAM 1 (segment-anything) 后端
 │       └── sam2.py             # SAM 2 (sam-2) 后端
-├── tests/                      # 134 个单元测试
+├── tests/                      # 176 个单元测试
 └── docs/TEST_PLAN.md           # 功能逻辑文档 + 测试计划
 ```
 

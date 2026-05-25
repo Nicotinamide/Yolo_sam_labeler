@@ -246,7 +246,9 @@
 
 ---
 
-## 二、测试实施计划
+## 二、测试实施计划（历史规划存档）
+
+> 以下 Phase 1~4 是早期规划，仅 Phase 1（纯逻辑测试）已落地。当前实际测试覆盖见文末「实际测试矩阵」。
 
 ### Phase 1: 纯逻辑单元测试 (无 GUI 依赖)
 
@@ -257,14 +259,14 @@
 | test_yolo_service.py | yolo_service.py | 修复失败 + 补充 |
 | test_colors.py | colors.py | 颜色映射一致性 |
 
-### Phase 2: 服务层 mock 测试
+### Phase 2: 服务层 mock 测试（未实施）
 
 | 测试文件 | 覆盖模块 | 测试要点 |
 |----------|----------|----------|
 | test_sam_service.py | sam_service.py | 状态机, cache, pending_prompt |
 | test_workers.py | workers.py | 编码/预测/缓存/逐出 |
 
-### Phase 3: GUI 组件测试 (pytest-qt)
+### Phase 3: GUI 组件测试 (pytest-qt)（未实施）
 
 | 测试文件 | 覆盖模块 | 测试要点 |
 |----------|----------|----------|
@@ -273,7 +275,7 @@
 | test_canvas_widget.py | canvas.py (widget) | 事件转发 |
 | test_app_input.py | app_input.py | 键鼠模拟 |
 
-### Phase 4: 集成测试
+### Phase 4: 集成测试（部分实施 → `test_app_smoke.py`）
 
 | 测试文件 | 场景 |
 |----------|------|
@@ -285,13 +287,13 @@
 
 ```bash
 # 全量运行
-/home/liyike/yolo_seg_label_sam/.venv/bin/python -m pytest tests/ -v
+.venv/bin/python -m pytest tests/ -v
 
 # 带覆盖率
-/home/liyike/yolo_seg_label_sam/.venv/bin/python -m pytest tests/ --cov=yolo_sam_labeler --cov-report=term-missing
+.venv/bin/python -m pytest tests/ --cov=yolo_sam_labeler --cov-report=term-missing
 
 # 只跑纯逻辑 (不需要 display)
-/home/liyike/yolo_seg_label_sam/.venv/bin/python -m pytest tests/ -v -k "not gui and not widget"
+.venv/bin/python -m pytest tests/ -v -k "not gui and not widget"
 ```
 
 
@@ -357,7 +359,7 @@
 ## 五、测试运行
 
 ```bash
-# 全量测试 (134 个)
+# 全量测试 (176 个，自动 offscreen Qt)
 QT_QPA_PLATFORM=offscreen python -m pytest tests/ -v
 
 # 仅纯逻辑 (无 Qt)
@@ -365,6 +367,22 @@ python -m pytest tests/test_models.py tests/test_models_extended.py \
                   tests/test_io_utils.py tests/test_io_utils_extended.py \
                   tests/test_yolo_service.py tests/test_backends.py tests/test_colors.py
 ```
+
+### 实际测试矩阵
+
+| 测试文件 | 数量 | 覆盖范围 |
+|----------|------|---------|
+| test_models.py | 数据模型基础 | Box / Mask / ClassRegistry / AnnotationStore |
+| test_models_extended.py | 边界 + 异常 | 空注册表、稀疏 ID、replace_box_with_mask 验证 |
+| test_io_utils.py | IO 基础 | 图像扫描、YOLO 编解码、classes.txt |
+| test_io_utils_extended.py | label-storage | sniff、split_mixed、reconcile、cleanup_empty、SaveReport |
+| test_canvas.py | CoordTransformer | 视图变换、缩放、平移 |
+| test_canvas_extended.py | 渲染 | render_composite 图层顺序、composite_to_pixmap |
+| test_colors.py | 颜色映射 | 一致性 |
+| test_backends.py | SAM 后端 | factory 选择、模型类型推断 |
+| test_yolo_service.py | YOLO 解析 | _build_prediction 多种 mask 表示形式回退 |
+| test_app_smoke.py | MainWindow 决策树 | _seed_label_dirs 四分支、_apply_label_dir_choice、image_dir 切换清空 |
+| **总计** | **176 个 pytest 用例** | |
 
 
 ---
@@ -412,4 +430,4 @@ python -m pytest tests/test_models.py tests/test_models_extended.py \
 
 - `tests/test_io_utils.py` / `tests/test_io_utils_extended.py`：IO 单元 + SaveReport 字段 + 共享目录 + 拆分。
 - `tests/test_app_smoke.py`：MainWindow 决策树（_seed_label_dirs 四分支、_apply_label_dir_choice 三种 kind、image_dir 切换清空）。
-- 总计 165+ 个 pytest 用例覆盖此子系统。
+- 全仓库共 176 个 pytest 用例，其中 label-storage 子系统占大头。

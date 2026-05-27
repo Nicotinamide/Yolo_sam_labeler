@@ -189,8 +189,24 @@ class TestCollect:
         cfg = self._make_cfg(seg_dir=str(seg), classes_file=classes)
         entries = ExportWorker(cfg)._collect_entries()
         arcnames = [arc for arc, _ in entries]
+        # Appears at archive root, not nested under labels/.
         assert "classes.txt" in arcnames
+        assert "labels/classes.txt" not in arcnames
+        assert arcnames.count("classes.txt") == 1
         assert "labels/001.txt" in arcnames
+
+    def test_classes_in_label_dir_not_double_packed(self, tmp_path):
+        """classes.txt sitting inside the label dir must not also appear under labels/."""
+        seg = tmp_path / "labels"
+        _make_labels(str(seg), ["001", "002"])
+        classes = _make_classes(str(seg), ["foo"])
+        cfg = self._make_cfg(seg_dir=str(seg), classes_file=classes)
+        entries = ExportWorker(cfg)._collect_entries()
+        arcnames = [arc for arc, _ in entries]
+        # The classes.txt sitting in seg/ should not be picked up as a label.
+        assert "labels/classes.txt" not in arcnames
+        # Only the root-level entry exists.
+        assert arcnames.count("classes.txt") == 1
 
     def test_meta_dir_excluded_by_default(self, tmp_path):
         seg = tmp_path / "labels"

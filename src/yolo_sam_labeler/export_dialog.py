@@ -159,7 +159,12 @@ def _list_image_stems(directory: str) -> list[tuple[str, str]]:
 
 def _list_label_files(directory: str, *, exclude_meta: bool, skip_empty: bool
                       ) -> list[tuple[str, str]]:
-    """Return [(rel_arcname, abs_path), ...] for label .txt + classes.txt."""
+    """Return [(rel_arcname, abs_path), ...] for label .txt files.
+
+    ``classes.txt`` is intentionally excluded — it's added separately at the
+    archive root by the worker so it lives next to the labels/ folder rather
+    than inside it.
+    """
     if not directory or not os.path.isdir(directory):
         return []
     out: list[tuple[str, str]] = []
@@ -175,7 +180,10 @@ def _list_label_files(directory: str, *, exclude_meta: bool, skip_empty: bool
         ext = os.path.splitext(entry)[1].lower()
         if ext != ".txt":
             continue
-        if skip_empty and entry != "classes.txt":
+        if entry.lower() == "classes.txt":
+            # Routed separately by ExportWorker (archive root).
+            continue
+        if skip_empty:
             try:
                 if os.path.getsize(full) == 0:
                     continue

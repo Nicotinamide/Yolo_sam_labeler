@@ -47,3 +47,6 @@ data_file/
 runs/
 labels/
 images/
+
+# Kiro spec workspace (local only)
+.kiro/

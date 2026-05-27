@@ -183,6 +183,10 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
         act_class_file.triggered.connect(self._pick_class_file)
         file_menu.addAction(act_class_file)
         file_menu.addSeparator()
+        act_export = QAction("导出数据包…", self)
+        act_export.triggered.connect(self._export_dataset)
+        file_menu.addAction(act_export)
+        file_menu.addSeparator()
         act_save = QAction("保存当前图", self)
         act_save.setShortcuts([QKeySequence("S"), QKeySequence.Save])
         act_save.triggered.connect(self._save_current)
@@ -1411,6 +1415,31 @@ class MainWindow(SamControllerMixin, InputHandlerMixin, QMainWindow):
             self.rpanel.select_class(self.current_class_id)
         self._persist_classes()
         self._log(f"已载入类别文件: {path} ({len(classes)} 个类别)", "ok")
+
+    def _export_dataset(self):
+        """Open the export dialog and run the worker."""
+        from .export_dialog import run_export
+        # Pick a classes.txt to bundle alongside the labels.
+        classes_file = ""
+        for candidate in self._class_file_candidates():
+            if os.path.isfile(candidate):
+                classes_file = candidate
+                break
+        if not (self.store.seg_dir or self.store.detect_dir or self.image_dir):
+            QMessageBox.warning(
+                self, "无法导出",
+                "请先打开图片目录或选择标签目录。",
+            )
+            return
+        run_export(
+            self,
+            image_dir=self.image_dir,
+            seg_dir=self.store.seg_dir,
+            detect_dir=self.store.detect_dir,
+            classes_file=classes_file,
+            settings=self.settings,
+            log_fn=self._log,
+        )
 
     # ==================================================================
     # Window management

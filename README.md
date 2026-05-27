@@ -6,8 +6,13 @@ PyQt5 标注工具，SAM 点击分割 + 拖拽画框一体化界面，输出 YOL
 
 ## 安装
 
-推荐直接使用项目脚本。脚本会自动检测 Jetson / x86 CUDA / CPU，并在 uv / conda
-之间选择安装方式；日志使用统一的 `🔍` / `📦` / `🧪` / `✅` 风格。
+推荐用 `install.sh`。这个项目同时依赖 PyTorch、PyQt5、OpenCV 和 SAM，安装顺序很重要：
+
+- Jetson：使用 Jetson AI Lab 的 `torch==2.8.0` / `torchvision==0.23.0`，CUDA 12.6。
+- Jetson：PyQt5 走系统 apt 包，venv 需要开启 `system-site-packages`。
+- x86_64 + NVIDIA：使用 PyTorch CUDA 12.4 wheel。
+- OpenCV：使用 `opencv-python-headless`，避免和 PyQt5 的 Qt 库冲突。
+- NumPy：限制 `<2`，避免 torch / SAM 相关 wheel 的 ABI 问题。
 
 ### 一键安装
 
@@ -22,30 +27,25 @@ bash install.sh
 常用安装参数：
 
 ```bash
+bash install.sh                            # 自动选择 uv / conda
 bash install.sh --uv                       # 强制 uv（项目本地 .venv）
 bash install.sh --conda                    # 强制 conda
 bash install.sh --conda-env yolo-labeler   # 指定/创建 conda 环境
 bash install.sh --clean-user-local         # 清理 ~/.local 里的残留 torch 包
 ```
 
-脚本会：
+默认规则：交互式终端会询问使用 conda 还是 uv；非交互运行时，已激活非 base
+conda 环境就用 conda，否则用 uv。
 
-- 自动检测平台（x86_64 / Jetson aarch64）
-- 自动选择或使用指定的 uv / conda 安装方式
-- 按设备安装 PyTorch
-- Jetson 上自动安装系统 PyQt5 并开启 `system-site-packages`
-- 切换到 `opencv-python-headless`，避免 Qt 冲突
-- 验证 torch、CUDA、OpenCV、PyQt5、SAM 是否可用
-
-`uv` 会缓存下载过的 wheel。第一次下载 Jetson torch 可能较慢，后续删除 `.venv`
-重装会直接复用 `~/.cache/uv`，通常很快。
+Jetson 的 torch wheel 比较大，第一次下载会慢。uv 会缓存 wheel，后续删除 `.venv`
+再安装会复用 `~/.cache/uv`。
 
 ### 手动安装
 
 <details>
 <summary><b>x86_64 — uv（推荐）</b></summary>
 
-前提：安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)
+前提：已安装 `uv`。
 
 ```bash
 # 1. 安装基础依赖
@@ -73,7 +73,7 @@ uv run yolo-sam-label
 <details>
 <summary><b>Jetson (aarch64) — uv</b></summary>
 
-前提：安装 [uv](https://docs.astral.sh/uv/getting-started/installation/) + 系统 PyQt5
+前提：已安装 `uv`，并安装系统 PyQt5。
 
 ```bash
 # 0. 系统 PyQt5 (apt 安装, pip 上没有 aarch64 wheel)
@@ -143,9 +143,13 @@ yolo-sam-label
 
 ---
 
-### 为什么 PyTorch 要单独装？
+### PyTorch 源选择
 
-PyTorch 的安装 URL 取决于你的 CUDA 版本和平台（x86/arm/Mac），无法用标准 `pyproject.toml` 统一描述。这是所有深度学习桌面项目的通行做法。`install.sh` 已经帮你处理了这一步。
+PyTorch 不放在 `pyproject.toml` 里。不同平台要用不同源：
+
+- Jetson / CUDA 12.6：`https://pypi.jetson-ai-lab.io/jp6/cu126`
+- x86_64 / CUDA 12.4：`https://download.pytorch.org/whl/cu124`
+- CPU：`https://download.pytorch.org/whl/cpu`
 
 ### 启动报 "Cannot mix incompatible Qt library" 怎么办？
 
@@ -157,7 +161,7 @@ uv pip uninstall opencv-python -y
 uv pip install --force-reinstall "opencv-python-headless>=4.5,<4.12" "numpy>=1.21,<2"
 ```
 
-`install.sh` 默认已经帮你换成 headless 版了，手动安装时才需要这一步。
+使用 `install.sh` 安装时会自动换成 headless 版；手动安装时需要执行上面的命令。
 
 ### conda 和 uv 冲突？
 

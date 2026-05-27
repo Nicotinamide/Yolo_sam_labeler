@@ -4,36 +4,43 @@ PyQt5 标注工具，SAM 点击分割 + 拖拽画框一体化界面，输出 YOL
 
 > **环境要求**：Python **3.10 / 3.11**（不要用 3.12+，PyTorch + PyQt5 + Jetson 兼容性问题）
 
-## 快速安装
+## 安装
 
-### 方式一：一键脚本（推荐）
+推荐直接使用项目脚本。脚本会自动检测 Jetson / x86 CUDA / CPU，并在 uv / conda
+之间选择安装方式；日志使用统一的 `🔍` / `📦` / `🧪` / `✅` 风格。
 
-自动检测平台（x86_64 / Jetson aarch64），自动安装所有依赖：
+### 一键安装
 
 ```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
 git clone https://github.com/Nicotinamide/Yolo_sam_labeler.git
 cd Yolo_sam_labeler
 bash install.sh
 ```
 
-如果你明确要用 conda，并希望脚本按 `environment.yml` 创建环境：
+常用安装参数：
 
 ```bash
-bash install.sh --conda-env yolo-sam-labeler
+bash install.sh --uv                       # 强制 uv（项目本地 .venv）
+bash install.sh --conda                    # 强制 conda
+bash install.sh --conda-env yolo-labeler   # 指定/创建 conda 环境
+bash install.sh --clean-user-local         # 清理 ~/.local 里的残留 torch 包
 ```
 
 脚本会：
-1. 让你选择 conda 或 uv
-2. 检测你的架构（x86_64 / aarch64）
-3. 选择 conda 时自动创建/激活环境
-4. 选择 uv 时自动创建项目本地 `.venv`
-5. 安装所有依赖（包括按设备选择 PyTorch）
-6. Jetson 上自动安装系统 PyQt5 并开启 system-site-packages
-7. 验证安装是否成功
 
----
+- 自动检测平台（x86_64 / Jetson aarch64）
+- 自动选择或使用指定的 uv / conda 安装方式
+- 按设备安装 PyTorch
+- Jetson 上自动安装系统 PyQt5 并开启 `system-site-packages`
+- 切换到 `opencv-python-headless`，避免 Qt 冲突
+- 验证 torch、CUDA、OpenCV、PyQt5、SAM 是否可用
 
-### 方式二：手动安装
+`uv` 会缓存下载过的 wheel。第一次下载 Jetson torch 可能较慢，后续删除 `.venv`
+重装会直接复用 `~/.cache/uv`，通常很快。
+
+### 手动安装
 
 <details>
 <summary><b>x86_64 — uv（推荐）</b></summary>
@@ -46,9 +53,9 @@ uv sync
 
 # 2. 安装 PyTorch（必须单独装，因为需要指定 CUDA 版本）
 #    有 NVIDIA GPU:
-uv pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu124
+uv pip install --force-reinstall torch torchvision --index https://download.pytorch.org/whl/cu124 --index-strategy first-index
 #    无 GPU (纯 CPU):
-uv pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cpu
+uv pip install --force-reinstall torch torchvision --index https://download.pytorch.org/whl/cpu --index-strategy first-index
 
 # 3. 安装 SAM/YOLO 依赖
 uv pip install -e ".[sam,yolo]"
@@ -76,7 +83,7 @@ sudo apt-get install -y python3-pyqt5
 uv venv --system-site-packages --python python3.10 .venv
 
 # 2. 安装 Jetson 版 PyTorch
-uv pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+uv pip install --force-reinstall torch==2.8.0 torchvision==0.23.0 --index https://pypi.jetson-ai-lab.io/jp6/cu126 --index-strategy first-index
 
 # 3. 安装项目依赖 (含 SAM 1 + SAM 2)
 uv pip install -e ".[sam,yolo]"

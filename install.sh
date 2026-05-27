@@ -1,18 +1,26 @@
 #!/usr/bin/env bash
-# =============================================================================
-# YOLO SAM Labeler — 一键安装脚本
-# 自动检测平台 (x86_64 / aarch64 Jetson) 和环境管理器 (conda / uv)
-# =============================================================================
-set -e
+# ================================================================
+#  YOLO SAM Labeler 一键安装
+# ================================================================
+#
+#  用法:
+#      bash install.sh                          # 自动检测平台并安装
+#      bash install.sh --uv                     # 强制 uv（项目本地 .venv）
+#      bash install.sh --conda                  # 强制 conda
+#      bash install.sh --conda-env yolo-labeler # 指定/创建 conda 环境
+#      bash install.sh --clean-user-local       # 清理 ~/.local 里的残留 torch 包
+#
+#  网络不好怎么办:
+#      1. 先在能联网的机器上跑一遍 install.sh，让 uv/pip cache 缓存好
+#      2. 后续删除 .venv 重装会直接复用本地缓存
+#      3. Jetson 首次下载 torch wheel 较慢，缓存命中后会很快
+# ================================================================
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+set -euo pipefail
 
-info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
-error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+info()  { echo "$1"; }
+warn()  { echo "⚠ $1"; }
+error() { echo "❌ $1"; exit 1; }
 
 ARCH=$(uname -m)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -38,7 +46,14 @@ while [[ $# -gt 0 ]]; do
             CLEAN_USER_LOCAL=1; shift ;;
         -h|--help)
             cat <<EOF
-用法: bash install.sh [选项]
+YOLO SAM Labeler 一键安装
+
+用法:
+  bash install.sh                          # 自动检测平台并安装
+  bash install.sh --uv                     # 强制 uv（项目本地 .venv）
+  bash install.sh --conda                  # 强制 conda
+  bash install.sh --conda-env yolo-labeler # 指定/创建 conda 环境
+  bash install.sh --clean-user-local       # 清理 ~/.local 里的残留 torch 包
 
 选项:
   --uv                   强制走 uv 路线（创建 .venv，忽略 conda）
@@ -48,11 +63,11 @@ while [[ $# -gt 0 ]]; do
   -h, --help             显示此帮助
 
 默认: 交互式选择 conda / uv；非交互时：已激活 conda 环境 → conda，否则 → uv
-示例:
-  bash install.sh                          # 交互选择 conda / uv
-  bash install.sh --uv                     # 强制用 uv
-  bash install.sh --conda                  # 使用/创建默认 conda 环境
-  bash install.sh --conda-env yolo-labeler # 用指定 conda 环境
+
+网络不好怎么办:
+  1. 先在能联网的机器上跑一遍 install.sh，让 uv/pip cache 缓存好
+  2. 后续删除 .venv 重装会直接复用本地缓存
+  3. Jetson 首次下载 torch wheel 较慢，缓存命中后会很快
 EOF
             exit 0 ;;
         *)
@@ -68,11 +83,13 @@ check_uv() { command -v uv &> /dev/null; }
 check_conda() { command -v conda &> /dev/null; }
 
 using_active_conda_env() {
-    [ -n "$CONDA_PREFIX" ] && [ -n "$CONDA_DEFAULT_ENV" ] && [ "$CONDA_DEFAULT_ENV" != "base" ]
+    [ -n "${CONDA_PREFIX:-}" ] \
+        && [ -n "${CONDA_DEFAULT_ENV:-}" ] \
+        && [ "${CONDA_DEFAULT_ENV:-}" != "base" ]
 }
 
 install_uv() {
-    info "正在安装 uv..."
+    info "📦 安装 uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$PATH"
     if ! check_uv; then
@@ -98,7 +115,7 @@ prompt_install_mode() {
     info "请选择环境管理器:"
     if check_conda; then
         if using_active_conda_env; then
-            echo "  1) conda  (当前环境: $CONDA_DEFAULT_ENV)"
+            echo "  1) conda  (当前环境: ${CONDA_DEFAULT_ENV:-})"
         else
             echo "  1) conda  (自动创建/使用环境: $DEFAULT_CONDA_ENV)"
         fi
@@ -131,10 +148,10 @@ activate_or_create_conda_env() {
     if ! check_conda; then
         error "找不到 conda 命令。请先安装 anaconda/miniforge，或使用 --uv"
     fi
-    info "激活 conda 环境: $env_name"
+    info "📦 激活 conda 环境: $env_name"
     eval "$(conda shell.bash hook)"
     if ! conda activate "$env_name" 2>/dev/null; then
-        info "环境 $env_name 不存在，按 environment.yml 创建..."
+        info "📦 环境 $env_name 不存在，按 environment.yml 创建..."
         conda env create -f environment.yml -n "$env_name"
         conda activate "$env_name"
     fi
@@ -165,10 +182,10 @@ detect_pytorch_choice() {
     esac
     # x86_64 — 检测 NVIDIA GPU
     if command -v nvidia-smi &> /dev/null && nvidia-smi &> /dev/null; then
-        info "检测到 NVIDIA GPU → 安装 GPU 版 PyTorch (CUDA 12.4)" >&2
+        info "🔍 检测到 NVIDIA GPU: cuda12" >&2
         echo "gpu"
     else
-        info "未检测到 NVIDIA GPU → 安装 CPU 版 PyTorch" >&2
+        info "🔍 未检测到 NVIDIA GPU: cpu" >&2
         echo "cpu"
     fi
 }
@@ -176,22 +193,52 @@ detect_pytorch_choice() {
 install_pytorch_for() {
     # $1 = pip command (e.g. "pip", "uv pip")
     # $2 = "gpu" | "cpu" | "jetson" | "skip"
-    case "$2" in
+    local pip_cmd="$1"
+    local pt_choice="$2"
+    local torch_index=""
+    local -a torch_packages=()
+
+    case "$pt_choice" in
         gpu)
-            $1 install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu124
+            torch_index="https://download.pytorch.org/whl/cu124"
+            torch_packages=("torch" "torchvision")
             ;;
         cpu)
-            $1 install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cpu
+            torch_index="https://download.pytorch.org/whl/cpu"
+            torch_packages=("torch" "torchvision")
             ;;
         jetson)
-            $1 install --force-reinstall torch==2.8.0 torchvision==0.23.0 \
-                --index-url https://pypi.jetson-ai-lab.io/jp6/cu126
+            torch_index="https://pypi.jetson-ai-lab.io/jp6/cu126"
+            torch_packages=("torch==2.8.0" "torchvision==0.23.0")
             ;;
         skip)
-            warn "跳过 PyTorch 安装"
+            info "⏭  跳过 PyTorch 安装"
+            return
             ;;
         *)
-            error "未知 PyTorch 安装选项: $2"
+            error "未知 PyTorch 安装选项: $pt_choice"
+            ;;
+    esac
+
+    echo "   尝试: $torch_index"
+    if [[ "$pip_cmd" == "uv pip" ]]; then
+        uv pip install --force-reinstall --index "$torch_index" --index-strategy first-index "${torch_packages[@]}"
+        return
+    fi
+
+    case "$2" in
+        gpu)
+            $pip_cmd install --force-reinstall torch torchvision --index-url "$torch_index"
+            ;;
+        cpu)
+            $pip_cmd install --force-reinstall torch torchvision --index-url "$torch_index"
+            ;;
+        jetson)
+            $pip_cmd install --force-reinstall torch==2.8.0 torchvision==0.23.0 \
+                --index-url "$torch_index"
+            ;;
+        *)
+            error "未知 PyTorch 安装选项: $pt_choice"
             ;;
     esac
 }
@@ -209,25 +256,24 @@ ensure_numpy_compatible() {
 
 verify_install() {
     local py="$1"
-    info "验证安装..."
+    info "🧪 验证安装..."
     "$py" -c "
 import torch
-print(f'  PyTorch {torch.__version__}')
-print(f'  CUDA available: {torch.cuda.is_available()}')
+cuda = '✓ CUDA' if torch.cuda.is_available() else 'CPU only'
+print(f'  ✓ torch {torch.__version__}  ({cuda})')
 if torch.cuda.is_available():
-    print(f'  GPU: {torch.cuda.get_device_name(0)}')
+    print(f'    设备: {torch.cuda.get_device_name(0)}')
 import cv2
-print(f'  OpenCV {cv2.__version__}')
+print(f'  ✓ opencv-python-headless {cv2.__version__}')
 from PyQt5.QtCore import QT_VERSION_STR
-print(f'  PyQt5 {QT_VERSION_STR}')
+print(f'  ✓ PyQt5 {QT_VERSION_STR}')
 import segment_anything
-print(f'  SAM 1: ✓')
+print(f'  ✓ SAM 1')
 try:
     import sam2
-    print(f'  SAM 2: ✓')
+    print(f'  ✓ SAM 2')
 except ImportError:
-    print(f'  SAM 2: ✗ (可选)')
-print('  ✓ 所有依赖就绪')
+    print(f'  ⚠ SAM 2 未安装（可选）')
 "
 }
 
@@ -236,23 +282,29 @@ print('  ✓ 所有依赖就绪')
 # =============================================================================
 
 install_uv_x86() {
-    info "=== uv 安装路径 (x86_64) ==="
+    info "▶ 使用安装方式: uv"
+    info "🔍 自动检测平台: x86_64"
 
     if ! check_uv; then
         install_uv
     fi
 
-    info "创建虚拟环境并安装基础依赖..."
+    echo ""
+    info "📦 创建虚拟环境并安装基础依赖..."
     uv sync
 
     local pt_choice
     pt_choice=$(detect_pytorch_choice)
+    echo ""
+    info "📦 安装 PyTorch ($pt_choice)..."
     install_pytorch_for "uv pip" "$pt_choice"
 
-    info "安装 SAM/YOLO 可选依赖..."
+    echo ""
+    info "📦 安装 SAM/YOLO 可选依赖..."
     uv pip install -e ".[sam,yolo]"
 
-    info "切换到 opencv-python-headless 避免 Qt 冲突..."
+    echo ""
+    info "📦 切换到 opencv-python-headless..."
     uv pip uninstall opencv-python -y 2>/dev/null || true
     uv pip install --force-reinstall \
         "opencv-python-headless>=4.5,<4.12" \
@@ -263,8 +315,12 @@ install_uv_x86() {
     verify_install ".venv/bin/python"
 
     echo ""
-    info "=== 安装完成 ==="
-    info "运行方式: bash run.sh"
+    echo "========================================"
+    echo "✅ 安装完成"
+    echo "========================================"
+    echo ""
+    echo "下一步:"
+    echo "  bash run.sh                             # 启动标注工具"
 }
 
 # =============================================================================
@@ -272,18 +328,21 @@ install_uv_x86() {
 # =============================================================================
 
 install_uv_jetson() {
-    info "=== uv 安装路径 (Jetson aarch64) ==="
+    info "▶ 使用安装方式: uv"
+    info "🔍 自动检测平台: jetson"
 
     if ! check_uv; then
         install_uv
     fi
 
     if ! python3 -c "import PyQt5" 2>/dev/null; then
-        info "安装系统 PyQt5 (Jetson 上 pip 没有 aarch64 wheel)..."
+        echo ""
+        info "📦 安装系统 PyQt5 (Jetson 上 pip 没有 aarch64 wheel)..."
         sudo apt-get update && sudo apt-get install -y python3-pyqt5
     fi
 
-    info "创建虚拟环境 (继承系统 site-packages 以使用系统 PyQt5)..."
+    echo ""
+    info "📦 创建虚拟环境 (.venv, system-site-packages)..."
     if [ -f ".venv/pyvenv.cfg" ] \
         && ! grep -qi "include-system-site-packages = true" ".venv/pyvenv.cfg"; then
         warn ".venv 已存在但未开启 system-site-packages，重建以使用系统 PyQt5..."
@@ -292,13 +351,16 @@ install_uv_jetson() {
         uv venv --allow-existing --system-site-packages --python python3.10 .venv
     fi
 
-    info "安装 Jetson 版 PyTorch..."
+    echo ""
+    info "📦 安装 PyTorch (jetson)..."
     install_pytorch_for "uv pip" "jetson"
 
-    info "安装项目依赖..."
+    echo ""
+    info "📦 安装项目依赖..."
     uv pip install -e ".[sam,yolo]"
 
-    info "切换到 opencv-python-headless..."
+    echo ""
+    info "📦 切换到 opencv-python-headless..."
     uv pip uninstall opencv-python -y 2>/dev/null || true
     uv pip install --force-reinstall \
         "opencv-python-headless>=4.5,<4.12" \
@@ -309,8 +371,12 @@ install_uv_jetson() {
     verify_install ".venv/bin/python"
 
     echo ""
-    info "=== 安装完成 ==="
-    info "运行方式: bash run.sh"
+    echo "========================================"
+    echo "✅ 安装完成"
+    echo "========================================"
+    echo ""
+    echo "下一步:"
+    echo "  bash run.sh                             # 启动标注工具"
 }
 
 # =============================================================================
@@ -336,7 +402,7 @@ check_user_local_pollution() {
             for d in $found; do
                 rm -rf "$d"/torch* "$d"/nvidia* "$d"/triton* 2>/dev/null
             done
-            info "已清理 ~/.local 残留包"
+            info "✓ 已清理 ~/.local 残留包"
         else
             warn "本次不自动删除用户目录包；如确认要清理，请重新运行并加 --clean-user-local"
         fi
@@ -351,12 +417,13 @@ ensure_conda_pyqt() {
     if ! check_conda; then
         error "当前 conda 环境缺少 PyQt5，且找不到 conda 命令。请先安装: conda install -c conda-forge 'pyqt>=5.15,<6'"
     fi
-    info "当前 conda 环境缺少 PyQt5，使用 conda-forge 安装 pyqt..."
+    info "📦 当前 conda 环境缺少 PyQt5，使用 conda-forge 安装 pyqt..."
     conda install -y -c conda-forge "pyqt>=5.15,<6"
 }
 
 install_conda() {
-    info "=== conda 安装路径 (环境: $CONDA_DEFAULT_ENV) ==="
+    info "▶ 使用安装方式: conda"
+    info "🔍 当前 conda 环境: $CONDA_DEFAULT_ENV"
 
     local py="$CONDA_PREFIX/bin/python"
     if [ ! -x "$py" ]; then
@@ -375,45 +442,46 @@ install_conda() {
     # pip 命令缩写
     local PIP="$py -m pip --no-cache-dir"
 
-    info "更新 pip 构建工具..."
+    echo ""
+    info "📦 更新 pip 构建工具..."
     $PIP install --upgrade "pip>=23" "setuptools>=68" wheel
 
     local pt_choice
     pt_choice=$(detect_pytorch_choice)
+    echo ""
+    info "📦 安装 PyTorch ($pt_choice)..."
     install_pytorch_for "$PIP" "$pt_choice"
 
-    info "安装项目依赖..."
+    echo ""
+    info "📦 安装项目依赖..."
     $PIP install -e ".[sam,yolo]"
 
-    info "切换到 opencv-python-headless (钉版本以避免 numpy 被升到 2.x)..."
+    echo ""
+    info "📦 切换到 opencv-python-headless..."
     $PIP uninstall opencv-python -y 2>/dev/null || true
     # 同时约束 numpy<2，避免 pip 把 numpy 升到 2.x
     $PIP install --force-reinstall \
         "opencv-python-headless>=4.5,<4.12" \
         "numpy>=1.21,<2"
 
-    info "校验依赖一致性..."
+    info "📦 校验依赖一致性..."
     ensure_numpy_compatible "$py" "$PIP"
 
     verify_install "$py"
 
     echo ""
-    info "=== 安装完成 ==="
-    info "运行方式（在当前 conda 环境里）: bash run.sh"
-    info "下次开机记得先 conda activate $CONDA_DEFAULT_ENV"
+    echo "========================================"
+    echo "✅ 安装完成"
+    echo "========================================"
+    echo ""
+    echo "下一步:"
+    echo "  conda activate $CONDA_DEFAULT_ENV"
+    echo "  bash run.sh                             # 启动标注工具"
 }
 
 # =============================================================================
 # 主入口
 # =============================================================================
-
-echo ""
-echo "╔══════════════════════════════════════════╗"
-echo "║     YOLO SAM Labeler 安装向导            ║"
-echo "╚══════════════════════════════════════════╝"
-echo ""
-info "架构: $ARCH"
-info "工作目录: $SCRIPT_DIR"
 
 # 路径选择规则:
 # 1. 命令行 --uv / --conda / --conda-env 强制指定
